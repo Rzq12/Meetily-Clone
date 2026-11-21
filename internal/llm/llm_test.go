@@ -136,7 +136,7 @@ var oneSection = []template.Section{{Title: "Ringkasan", Instruction: "Ringkas",
 
 func TestGenerateShortTranscriptUsesOneCall(t *testing.T) {
 	s := &stubLLM{reply: "## Ringkasan\nRapat membahas anggaran."}
-	got, err := newStub(t, s).Generate(context.Background(), "[00:01] halo\n", oneSection, 6000)
+	got, err := newStub(t, s).Generate(context.Background(), "[00:01] halo\n", "", oneSection, 6000)
 	if err != nil || got != s.reply {
 		t.Fatalf("got (%q, %v)", got, err)
 	}
@@ -148,7 +148,7 @@ func TestGenerateShortTranscriptUsesOneCall(t *testing.T) {
 func TestGenerateLongTranscriptMapsThenCombines(t *testing.T) {
 	s := &stubLLM{reply: "ringkasan potongan"}
 	long := strings.Repeat("[00:01] kalimat panjang dalam rapat bulanan\n", 300)
-	if _, err := newStub(t, s).Generate(context.Background(), long, oneSection, 1000); err != nil {
+	if _, err := newStub(t, s).Generate(context.Background(), long, "", oneSection, 1000); err != nil {
 		t.Fatal(err)
 	}
 	n := len(s.calls)
@@ -162,11 +162,11 @@ func TestGenerateLongTranscriptMapsThenCombines(t *testing.T) {
 
 func TestGenerateRetriesOnceThenFails(t *testing.T) {
 	s := &stubLLM{reply: "## Ringkasan\nok", failures: 1}
-	if _, err := newStub(t, s).Generate(context.Background(), "x\n", oneSection, 6000); err != nil {
+	if _, err := newStub(t, s).Generate(context.Background(), "x\n", "", oneSection, 6000); err != nil {
 		t.Fatalf("one failure should be retried: %v", err)
 	}
 	s2 := &stubLLM{reply: "ok", failures: 2}
-	_, err := newStub(t, s2).Generate(context.Background(), "x\n", oneSection, 6000)
+	_, err := newStub(t, s2).Generate(context.Background(), "x\n", "", oneSection, 6000)
 	if err == nil || len(s2.calls) != 2 {
 		t.Fatalf("second failure must fail the step after exactly 2 calls; err=%v calls=%d", err, len(s2.calls))
 	}
@@ -174,9 +174,22 @@ func TestGenerateRetriesOnceThenFails(t *testing.T) {
 
 func TestGenerateEmptyOutputIsErrEmpty(t *testing.T) {
 	s := &stubLLM{reply: "<think>hanya berpikir</think>"}
-	_, err := newStub(t, s).Generate(context.Background(), "x\n", oneSection, 6000)
+	_, err := newStub(t, s).Generate(context.Background(), "x\n", "", oneSection, 6000)
 	if !errors.Is(err, ErrEmpty) {
 		t.Fatalf("got %v, want ErrEmpty", err)
+	}
+}
+
+func TestGeneratePassesNotetakerContextToFinalCall(t *testing.T) {
+	s := &stubLLM{reply: "## Ringkasan\nok"}
+	if _, err := newStub(t, s).Generate(context.Background(), "[00:01] halo\n", "Pak Budi = Direktur Keuangan", oneSection, 6000); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s.calls[0], "<konteks>\nPak Budi = Direktur Keuangan\n</konteks>") {
+		t.Fatalf("final prompt lacks the context block: %q", s.calls[0])
+	}
+	if strings.Contains(FinalUserPrompt("x", "   "), "<konteks>") {
+		t.Fatal("blank context must not add a block")
 	}
 }
 

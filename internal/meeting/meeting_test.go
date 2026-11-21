@@ -397,6 +397,83 @@ func TestRetrySkipsTranscriptionWhenSegmentsExist(t *testing.T) {
 	}
 }
 
+func TestSaveTitleAndContext(t *testing.T) {
+	f := setup(t)
+	id := f.doneMeeting(t, "Judul Lama")
+
+	if rec, _ := call(t, f.h.SaveTitle, f.participant, "PUT", "/", id, map[string]string{"title": "X"}); rec.Code != 403 {
+		t.Fatalf("participant title: %d, want 403", rec.Code)
+	}
+	if rec, _ := call(t, f.h.SaveTitle, f.owner, "PUT", "/", id, map[string]string{"title": "   "}); rec.Code != 422 {
+		t.Fatalf("blank title: %d, want 422", rec.Code)
+	}
+	if rec, _ := call(t, f.h.SaveTitle, f.owner, "PUT", "/", id, map[string]string{"title": " Rapat Desember "}); rec.Code != 200 {
+		t.Fatalf("save title: %d", rec.Code)
+	}
+	if rec, _ := call(t, f.h.SaveContext, f.owner, "PUT", "/", id, map[string]string{"summary_context": strings.Repeat("a", 2001)}); rec.Code != 422 {
+		t.Fatalf("long context: %d, want 422", rec.Code)
+	}
+	if rec, _ := call(t, f.h.SaveContext, f.owner, "PUT", "/", id, map[string]string{"summary_context": "Pak Budi = Direktur Keuangan"}); rec.Code != 200 {
+		t.Fatalf("save context: %d", rec.Code)
+	}
+	_, d := call(t, f.h.Detail, f.owner, "GET", "/", id, nil)
+	if d["title"] != "Rapat Desember" || d["summary_context"] != "Pak Budi = Direktur Keuangan" {
+		t.Fatalf("detail after save: title=%v context=%v", d["title"], d["summary_context"])
+	}
+}
+
+func TestCancelQueuedMeeting(t *testing.T) {
+	f := setup(t)
+	fresh := testutil.Meeting(t, f.pool, f.owner.ID, f.templateID, "Baru", "queued")
+	regen := f.doneMeeting(t, "Regenerasi")
+	mustExec(t, f.pool, `UPDATE meetings SET status = 'queued', skip_transcription = true WHERE id = $1`, regen)
+
+	for id, want := range map[string]string{fresh: "failed", regen: "done"} {
+		if rec, _ := call(t, f.h.Cancel, f.owner, "POST", "/", id, nil); rec.Code != 200 {
+			t.Fatalf("cancel: %d", rec.Code)
+		}
+		_, d := call(t, f.h.Detail, f.owner, "GET", "/", id, nil)
+		if d["status"] != want {
+			t.Errorf("status after cancel %v, want %s", d["status"], want)
+		}
+	}
+	_, d := call(t, f.h.Detail, f.owner, "GET", "/", fresh, nil)
+	if d["error_message"] != "Pemrosesan dibatalkan." {
+		t.Errorf("error_message %v", d["error_message"])
+	}
+	if rec, _ := call(t, f.h.Cancel, f.owner, "POST", "/", regen, nil); rec.Code != 409 {
+		t.Fatalf("cancel done meeting: %d, want 409", rec.Code)
+	}
+}
+
+func TestCancelRunningMeetingAsksWorker(t *testing.T) {
+	f := setup(t)
+	id := testutil.Meeting(t, f.pool, f.owner.ID, f.templateID, "Berjalan", "transcribing")
+	var asked string
+	f.h.CancelJob = func(m string) bool { asked = m; return true }
+	if rec, _ := call(t, f.h.Cancel, f.owner, "POST", "/", id, nil); rec.Code != 202 || asked != id {
+		t.Fatalf("running cancel: %d asked=%q", rec.Code, asked)
+	}
+	if rec, _ := call(t, f.h.Cancel, f.participant, "POST", "/", id, nil); rec.Code != 404 {
+		t.Fatalf("outsider cancel: %d, want 404", rec.Code)
+	}
+}
+
+func TestRecordingFormStoresContext(t *testing.T) {
+	f := setup(t)
+	rec, body := call(t, f.h.StartRecording, f.owner, "POST", "/", "", map[string]any{
+		"title": "Rapat", "meeting_date": "2026-11-21", "template_id": f.templateID,
+		"consent_confirmed": true, "mime_type": "audio/webm", "summary_context": "Agenda: anggaran Q4",
+	})
+	if rec.Code != 201 {
+		t.Fatalf("start: %d %v", rec.Code, body)
+	}
+	_, d := call(t, f.h.Detail, f.owner, "GET", "/", body["id"].(string), nil)
+	if d["summary_context"] != "Agenda: anggaran Q4" {
+		t.Fatalf("context %v", d["summary_context"])
+	}
+}
+
 func TestRenderMinutesEscapesHTMLAndLinksTimestamps(t *testing.T) {
 	out := string(RenderMinutes("## Keputusan\n- Setuju [12:34] dan [01:02:03]\n\n<script>alert(1)</script>"))
 	if strings.Contains(out, "<script>") {

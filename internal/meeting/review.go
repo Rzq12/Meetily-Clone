@@ -354,3 +354,84 @@ func (h *Handler) pandocDocx(ctx context.Context, doc string) ([]byte, error) {
 	}
 	return os.ReadFile(out)
 }
+
+type titleInput struct {
+	Title string `json:"title"`
+}
+
+func (h *Handler) SaveTitle(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.editAccess(w, r)
+	if !ok {
+		return
+	}
+	var in titleInput
+	if err := web.Decode(r, &in); err != nil {
+		web.Error(w, http.StatusBadRequest, "Isian tidak valid.")
+		return
+	}
+	in.Title = strings.TrimSpace(in.Title)
+	if !validTitle(in.Title) {
+		web.Error(w, http.StatusUnprocessableEntity, "Judul wajib diisi, maksimal 255 karakter.")
+		return
+	}
+	if _, err := h.Pool.Exec(r.Context(), `UPDATE meetings SET title = $2 WHERE id = $1`, id, in.Title); err != nil {
+		web.Internal(w, err)
+		return
+	}
+	web.JSON(w, http.StatusOK, map[string]string{"title": in.Title})
+}
+
+type contextInput struct {
+	SummaryContext string `json:"summary_context"`
+}
+
+// SaveContext stores the notetaker's notes for the AI; they are used on the next generation.
+func (h *Handler) SaveContext(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.editAccess(w, r)
+	if !ok {
+		return
+	}
+	var in contextInput
+	if err := web.Decode(r, &in); err != nil {
+		web.Error(w, http.StatusBadRequest, "Isian tidak valid.")
+		return
+	}
+	in.SummaryContext = strings.TrimSpace(in.SummaryContext)
+	if utf8.RuneCountInString(in.SummaryContext) > maxContextRunes {
+		web.Error(w, http.StatusUnprocessableEntity, "Konteks untuk AI maksimal 2000 karakter.")
+		return
+	}
+	if _, err := h.Pool.Exec(r.Context(), `UPDATE meetings SET summary_context = NULLIF($2, '') WHERE id = $1`, id, in.SummaryContext); err != nil {
+		web.Internal(w, err)
+		return
+	}
+	web.JSON(w, http.StatusOK, map[string]string{"summary_context": in.SummaryContext})
+}
+
+// Cancel removes a queued meeting from the queue, or asks the worker to stop the running job.
+// A meeting that already had minutes (a regenerate) returns to done with those minutes.
+func (h *Handler) Cancel(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.editAccess(w, r)
+	if !ok {
+		return
+	}
+	tag, err := h.Pool.Exec(r.Context(), `
+		UPDATE meetings SET
+		  status = CASE WHEN minutes_markdown IS NULL THEN 'failed' ELSE 'done' END,
+		  error_message = CASE WHEN minutes_markdown IS NULL THEN 'Pemrosesan dibatalkan.' END,
+		  skip_transcription = false, updated_at = $2
+		WHERE id = $1 AND status = 'queued'`, id, h.Now())
+	if err != nil {
+		web.Internal(w, err)
+		return
+	}
+	if tag.RowsAffected() == 1 {
+		web.JSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+		return
+	}
+	if h.CancelJob != nil && h.CancelJob(id) {
+		web.JSON(w, http.StatusAccepted, map[string]string{"status": "cancelling"})
+		return
+	}
+	web.Error(w, http.StatusConflict, "Rapat tidak sedang diproses.")
+}

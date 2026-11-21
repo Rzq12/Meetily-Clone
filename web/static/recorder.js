@@ -18,11 +18,12 @@ class Recorder {
   }
 
   // preview asks for the microphone and drives the level meter; returns an error message or null.
-  async preview() {
+  async preview(deviceId) {
     if (this.stream) return null;
     if (!navigator.mediaDevices || !window.MediaRecorder) return 'Browser tidak mendukung perekaman audio.';
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
+      this.deviceId = this.stream.getAudioTracks()[0].getSettings().deviceId;
     } catch (err) {
       if (err.name === 'NotAllowedError' || err.name === 'SecurityError') return 'Izin mikrofon ditolak. Aktifkan izin mikrofon di browser.';
       if (err.name === 'NotFoundError' || err.name === 'OverconstrainedError') return 'Mikrofon tidak ditemukan.';
@@ -46,6 +47,41 @@ class Recorder {
     };
     tick();
     return null;
+  }
+
+  // listDevices returns audio inputs; labels are only filled after microphone permission.
+  async listDevices() {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    return all.filter((d) => d.kind === 'audioinput');
+  }
+
+  // switchDevice reopens the preview on another microphone; only allowed before recording starts.
+  async switchDevice(deviceId) {
+    if (this.media) return null;
+    this.release();
+    return this.preview(deviceId);
+  }
+
+  pause() {
+    if (!this.media || this.media.state !== 'recording') return;
+    this.media.pause();
+    this.pausedAt = Date.now();
+    this.bars.forEach((bar) => bar.classList.add('is-paused'));
+  }
+
+  resume() {
+    if (!this.media || this.media.state !== 'paused') return;
+    this.pausedMs += Date.now() - this.pausedAt;
+    this.pausedAt = null;
+    this.media.resume();
+    this.bars.forEach((bar) => bar.classList.remove('is-paused'));
+  }
+
+  get paused() { return !!this.media && this.media.state === 'paused'; }
+
+  elapsedMs() {
+    const pausing = this.pausedAt ? Date.now() - this.pausedAt : 0;
+    return Date.now() - this.startedAt - this.pausedMs - pausing;
   }
 
   pickMime() {
@@ -73,8 +109,10 @@ class Recorder {
     });
     this.media.start(5000);
     this.startedAt = Date.now();
+    this.pausedMs = 0;
+    this.pausedAt = null;
     this.timer = setInterval(() => {
-      const elapsed = Date.now() - this.startedAt;
+      const elapsed = this.elapsedMs();
       this.clock.textContent = App.clock(elapsed / 1000);
       if (elapsed >= this.maxMs && this.onLimit) {
         clearInterval(this.timer);
@@ -156,6 +194,6 @@ class Recorder {
     this.stream = null;
     if (this.audioCtx) this.audioCtx.close();
     if (this.wakeLock) this.wakeLock.release();
-    this.bars.forEach((bar) => { bar.style.height = '4px'; });
+    this.bars.forEach((bar) => { bar.style.height = '4px'; bar.classList.remove('is-paused'); });
   }
 }

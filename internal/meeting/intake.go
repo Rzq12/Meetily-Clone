@@ -40,12 +40,24 @@ type meetingInput struct {
 	MeetingDate    string   `json:"meeting_date"`
 	TemplateID     string   `json:"template_id"`
 	ParticipantIDs []string `json:"participant_ids"`
+	SummaryContext string   `json:"summary_context"`
+}
+
+const maxContextRunes = 2000
+
+func validTitle(s string) bool {
+	n := utf8.RuneCountInString(s)
+	return n >= 1 && n <= 255
 }
 
 func (h *Handler) validateInput(ctx context.Context, in *meetingInput, ownerID string) (string, error) {
 	in.Title = strings.TrimSpace(in.Title)
-	if n := utf8.RuneCountInString(in.Title); n < 1 || n > 255 {
+	if !validTitle(in.Title) {
 		return "Judul wajib diisi, maksimal 255 karakter.", nil
+	}
+	in.SummaryContext = strings.TrimSpace(in.SummaryContext)
+	if utf8.RuneCountInString(in.SummaryContext) > maxContextRunes {
+		return "Konteks untuk AI maksimal 2000 karakter.", nil
 	}
 	date, err := web.ParseDate(in.MeetingDate)
 	if err != nil {
@@ -86,9 +98,9 @@ func (h *Handler) insertMeeting(ctx context.Context, id, ownerID, source, status
 		queuedAt = h.Now()
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO meetings (id, title, meeting_date, owner_id, template_id, source, status, audio_path, audio_duration_sec, queued_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		id, in.Title, in.MeetingDate, ownerID, in.TemplateID, source, status, rel, durationSec, queuedAt); err != nil {
+		INSERT INTO meetings (id, title, meeting_date, owner_id, template_id, source, status, audio_path, audio_duration_sec, queued_at, summary_context)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''))`,
+		id, in.Title, in.MeetingDate, ownerID, in.TemplateID, source, status, rel, durationSec, queuedAt, in.SummaryContext); err != nil {
 		return err
 	}
 	for _, pid := range in.ParticipantIDs {
@@ -128,7 +140,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 			h.storeUpload(w, r, u, in, part)
 			return
 		}
-		value, err := io.ReadAll(io.LimitReader(part, 4096))
+		value, err := io.ReadAll(io.LimitReader(part, 16384))
 		if err != nil {
 			web.Error(w, http.StatusBadRequest, "Unggahan tidak valid.")
 			return
@@ -142,6 +154,8 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 			in.TemplateID = string(value)
 		case "participant_ids":
 			in.ParticipantIDs = append(in.ParticipantIDs, string(value))
+		case "summary_context":
+			in.SummaryContext = string(value)
 		}
 	}
 }

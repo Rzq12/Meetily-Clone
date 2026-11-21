@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -26,6 +27,21 @@ type Worker struct {
 	RetentionDays  int
 	PollInterval   time.Duration
 	Now            func() time.Time
+
+	mu        sync.Mutex
+	runningID string
+	cancelRun context.CancelFunc
+}
+
+// Cancel stops the job currently processing meetingID; false means it is not running.
+func (w *Worker) Cancel(meetingID string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.runningID != meetingID || w.cancelRun == nil {
+		return false
+	}
+	w.cancelRun()
+	return true
 }
 
 // stepError carries the user-facing message stored in error_message; err goes to the log only.
@@ -76,6 +92,7 @@ type job struct {
 	id         string
 	templateID string
 	audioPath  string
+	context    string
 	skip       bool
 }
 
@@ -88,9 +105,9 @@ func (w *Worker) ProcessNext(ctx context.Context) (found bool, err error) {
 	defer tx.Rollback(ctx)
 	var j job
 	err = tx.QueryRow(ctx, `
-		SELECT id, template_id, audio_path, skip_transcription FROM meetings
+		SELECT id, template_id, audio_path, coalesce(summary_context, ''), skip_transcription FROM meetings
 		WHERE status = 'queued' ORDER BY queued_at LIMIT 1 FOR UPDATE SKIP LOCKED`).
-		Scan(&j.id, &j.templateID, &j.audioPath, &j.skip)
+		Scan(&j.id, &j.templateID, &j.audioPath, &j.context, &j.skip)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -108,7 +125,31 @@ func (w *Worker) ProcessNext(ctx context.Context) (found bool, err error) {
 		return false, err
 	}
 
-	if err := w.process(ctx, j); err != nil {
+	jobCtx, cancel := context.WithCancel(ctx)
+	w.mu.Lock()
+	w.runningID, w.cancelRun = j.id, cancel
+	w.mu.Unlock()
+	err = w.process(jobCtx, j)
+	w.mu.Lock()
+	w.runningID, w.cancelRun = "", nil
+	w.mu.Unlock()
+	cancelled := jobCtx.Err() != nil && ctx.Err() == nil
+	cancel()
+
+	if cancelled {
+		// A cancelled regenerate still has its previous minutes, so it returns to done.
+		slog.Info("meeting processing cancelled", "meeting_id", j.id)
+		if _, dbErr := w.Pool.Exec(ctx, `
+			UPDATE meetings SET
+			  status = CASE WHEN minutes_markdown IS NULL THEN 'failed' ELSE 'done' END,
+			  error_message = CASE WHEN minutes_markdown IS NULL THEN 'Pemrosesan dibatalkan.' END,
+			  skip_transcription = false, updated_at = $2
+			WHERE id = $1`, j.id, w.Now()); dbErr != nil {
+			return true, dbErr
+		}
+		return true, nil
+	}
+	if err != nil {
 		var se *stepError
 		msg := "Pemrosesan gagal."
 		if errors.As(err, &se) {
@@ -210,7 +251,7 @@ func (w *Worker) summarize(ctx context.Context, j job) error {
 		return &stepError{"load transcript", "Penyusunan notulen gagal.", err}
 	}
 
-	minutes, err := w.LLM.Generate(ctx, llm.FormatTranscript(lines), sections, w.TokenThreshold)
+	minutes, err := w.LLM.Generate(ctx, llm.FormatTranscript(lines), j.context, sections, w.TokenThreshold)
 	if errors.Is(err, llm.ErrEmpty) {
 		return &stepError{"summarize", "AI tidak menghasilkan notulen.", err}
 	}

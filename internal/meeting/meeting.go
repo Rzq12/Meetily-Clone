@@ -24,6 +24,8 @@ type Handler struct {
 	DataDir      string
 	ReferenceDoc string
 	Now          func() time.Time
+	// CancelJob stops the worker's running job for a meeting; false when that meeting is not running.
+	CancelJob func(meetingID string) bool
 }
 
 const listPageSize = 20
@@ -222,6 +224,7 @@ type detail struct {
 	AudioDurationSec *int          `json:"audio_duration_sec"`
 	AudioDeleted     bool          `json:"audio_deleted"`
 	MinutesMarkdown  *string       `json:"minutes_markdown"`
+	SummaryContext   string        `json:"summary_context"`
 	MinutesHTML      template.HTML `json:"minutes_html"`
 	HasBackup        bool          `json:"has_backup"`
 	MinutesEditedBy  *string       `json:"minutes_edited_by"`
@@ -238,7 +241,8 @@ func (h *Handler) load(ctx context.Context, id string) (*detail, error) {
 	err := h.Pool.QueryRow(ctx, `
 		SELECT m.id, m.title, m.meeting_date, m.owner_id, o.full_name, m.template_id, t.name,
 		       m.source, m.status, m.error_message, m.audio_duration_sec, m.audio_deleted_at,
-		       m.minutes_markdown, m.minutes_backup, e.full_name, m.minutes_edited_at, m.updated_at
+		       m.minutes_markdown, m.minutes_backup, e.full_name, m.minutes_edited_at, m.updated_at,
+		       coalesce(m.summary_context, '')
 		FROM meetings m
 		JOIN users o ON o.id = m.owner_id
 		JOIN templates t ON t.id = m.template_id
@@ -246,7 +250,8 @@ func (h *Handler) load(ctx context.Context, id string) (*detail, error) {
 		WHERE m.id = $1`, id).Scan(
 		&d.ID, &d.Title, &d.MeetingDate, &d.OwnerID, &d.OwnerName, &d.TemplateID, &d.TemplateName,
 		&d.Source, &d.Status, &d.ErrorMessage, &d.AudioDurationSec, &audioDeletedAt,
-		&d.MinutesMarkdown, &backup, &d.MinutesEditedBy, &d.MinutesEditedAt, &d.UpdatedAt)
+		&d.MinutesMarkdown, &backup, &d.MinutesEditedBy, &d.MinutesEditedAt, &d.UpdatedAt,
+		&d.SummaryContext)
 	if err != nil {
 		return nil, err
 	}

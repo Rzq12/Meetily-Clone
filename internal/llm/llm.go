@@ -110,7 +110,7 @@ func (c *Client) call(ctx context.Context, stage, system, user string) (string, 
 
 // Generate follows Meetily's map-reduce: chunk summaries and a combine step only when the
 // transcript reaches the token threshold, then one final call that fills the template.
-func (c *Client) Generate(ctx context.Context, transcript string, sections []template.Section, tokenThreshold int) (string, error) {
+func (c *Client) Generate(ctx context.Context, transcript, userContext string, sections []template.Section, tokenThreshold int) (string, error) {
 	source := transcript
 	if EstimateTokens(transcript) >= tokenThreshold {
 		chunks := ChunkText(transcript, tokenThreshold-300, 100)
@@ -128,5 +128,5 @@ func (c *Client) Generate(ctx context.Context, transcript string, sections []tem
 		}
 		source = combined
 	}
-	return c.call(ctx, "final", FinalSystemPrompt(sections), "<transkrip>\n"+source+"\n</transkrip>")
+	return c.call(ctx, "final", FinalSystemPrompt(sections), FinalUserPrompt(source, userContext))
 }

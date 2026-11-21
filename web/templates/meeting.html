@@ -22,6 +22,9 @@
         <div class="flex-1 overflow-hidden pb-4">
           <div class="flex flex-col h-full overflow-y-auto custom-scrollbar px-4 py-2" id="transcript"></div>
         </div>
+        <div class="p-1 border-t border-gray-200" id="context-panel" hidden>
+          <textarea id="context-box" class="context-box" maxlength="2000" aria-label="Konteks untuk notulen AI" placeholder="Tambahkan konteks untuk notulen AI. Misalnya orang yang terlibat, gambaran rapat, tujuan, dll..."></textarea>
+        </div>
       </div>
     </section>
 
@@ -60,6 +63,8 @@
   <span data-i="clock">{{icon "clock" "w-4 h-4"}}</span>
   <span data-i="trash-title">{{icon "trash-2" "text-red-600"}}</span>
   <span data-i="users-title">{{icon "users" "text-blue-600"}}</span>
+  <span data-i="square">{{icon "square"}}</span>
+  <span data-i="pencil-sm">{{icon "pencil" "w-4 h-4"}}</span>
 </template>
 {{end}}
 
@@ -149,6 +154,7 @@
     }
     segments = res.data.items;
     document.getElementById('copy-transcript').disabled = segments.length === 0;
+    document.getElementById('context-panel').hidden = !(m.can_edit && segments.length > 0);
     if (segments.length === 0) {
       const msg = isProcessing(m.status) || m.status === 'recording' ? 'Transkrip muncul setelah rekaman ditranskripsi.' : 'Belum ada transkrip.';
       list.replaceChildren(el('div', { class: 'text-center text-gray-500 mt-8' }, el('p', { class: 'text-sm', text: msg })));
@@ -172,6 +178,9 @@
     const bar = document.getElementById('toolbar');
     const groups = [];
     const done = m.status === 'done';
+    if (m.can_edit && isProcessing(m.status)) {
+      groups.push(el('div', { class: 'btn-group' }, button('Berhenti', 'square', cancelProcessing, 'btn-stop px-3')));
+    }
     if (m.can_edit && done && !editing) {
       const menu = el('div', { class: 'dropdown-content', hidden: true },
         templates.map((t) => el('button', {
@@ -223,7 +232,7 @@
     const meta = (ic, text) => el('span', { class: 'flex items-center gap-1' }, [icon(ic), el('span', { text })]);
     return el('div', { class: 'mb-6' }, [
       el('div', { class: 'flex items-start justify-between gap-4' }, [
-        el('h1', { class: 'text-2xl font-bold px-1 flex-1 whitespace-pre-wrap', text: m.title }),
+        titleNode(),
         el('span', { class: 'badge badge-' + m.status + ' mt-1', text: m.status_label }),
       ]),
       el('div', { class: 'flex flex-wrap items-center gap-4 text-sm text-gray-500 mt-2 px-1' }, [
@@ -233,6 +242,48 @@
       ]),
       el('p', { class: 'text-sm text-gray-500 mt-1 px-1', text: 'Peserta: ' + names }),
     ]);
+  }
+
+  // EditableTitle: click or the pencil to edit; Enter saves, Escape cancels, blur saves.
+  function titleNode() {
+    if (!m.can_edit || editing) return el('h1', { class: 'text-2xl font-bold px-1 flex-1 whitespace-pre-wrap', text: m.title });
+    const wrap = el('div', { class: 'group flex items-center space-x-2 flex-1' });
+    const h1 = el('h1', { class: 'text-2xl font-bold cursor-pointer hover:bg-gray-50 rounded px-1 flex-1 whitespace-pre-wrap', text: m.title, title: 'Klik untuk mengubah judul' });
+    const pen = el('button', { type: 'button', class: 'opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1 hover:bg-gray-100 rounded', 'aria-label': 'Ubah judul' }, icon('pencil-sm'));
+    const edit = () => {
+      const input = el('textarea', { class: 'title-edit', rows: 1, maxlength: 255, 'aria-label': 'Judul rapat' });
+      input.value = m.title;
+      let finished = false;
+      const finish = async (save) => {
+        if (finished) return;
+        finished = true;
+        const title = input.value.trim();
+        if (save && title && title !== m.title) {
+          const res = await App.api('PUT', `/api/meetings/${m.id}/title`, { title });
+          if (res.ok) {
+            m.title = res.data.title;
+            document.title = m.title + ' · Notulensi AI';
+            const side = document.querySelector(`#sidebar-meetings a[href="/meetings/${m.id}"] [data-title]`);
+            if (side) side.textContent = m.title;
+            App.toast('success', 'Judul rapat tersimpan.');
+          }
+          else App.toast('error', res.data.error || 'Judul gagal disimpan.');
+        }
+        renderSummary();
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        if (e.key === 'Escape') finish(false);
+      });
+      input.addEventListener('blur', () => finish(true));
+      wrap.replaceChildren(el('div', { class: 'flex-1' }, input));
+      input.focus();
+      input.select();
+    };
+    h1.addEventListener('click', edit);
+    pen.addEventListener('click', edit);
+    wrap.append(h1, el('div', { class: 'flex space-x-1' }, pen));
+    return wrap;
   }
 
   function centered(children) {
@@ -378,6 +429,26 @@
     App.toast('success', 'Versi sebelumnya dikembalikan.');
     refresh();
   }
+
+  async function cancelProcessing() {
+    const res = await App.api('POST', `/api/meetings/${m.id}/cancel`);
+    if (!res.ok) { App.toast('error', res.data.error || 'Gagal menghentikan pemrosesan.'); refresh(); return; }
+    App.toast('info', res.data.status === 'cancelling' ? 'Menghentikan pemrosesan...' : 'Pemrosesan dibatalkan.');
+    refresh();
+  }
+
+  // Notetaker context for the AI, saved as it is typed and used on the next generation.
+  const contextBox = document.getElementById('context-box');
+  contextBox.value = m.summary_context || '';
+  let contextTimer;
+  contextBox.addEventListener('input', () => {
+    clearTimeout(contextTimer);
+    contextTimer = setTimeout(async () => {
+      const res = await App.api('PUT', `/api/meetings/${m.id}/context`, { summary_context: contextBox.value });
+      if (!res.ok) App.toast('error', res.data.error || 'Konteks gagal disimpan.');
+      else m.summary_context = res.data.summary_context;
+    }, 800);
+  });
 
   async function retry() {
     const res = await App.api('POST', `/api/meetings/${m.id}/retry`);

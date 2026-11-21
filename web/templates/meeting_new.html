@@ -38,6 +38,10 @@
               <p class="text-xs text-gray-500">Peserta bisa membuka notulen rapat ini.</p>
               <div id="participants"></div>
             </div>
+            <div class="col-span-2 space-y-2">
+              <label for="summary_context" class="label">Konteks untuk AI <span class="text-gray-500 font-normal">(opsional)</span></label>
+              <textarea id="summary_context" name="summary_context" class="context-box" maxlength="2000" placeholder="Tambahkan konteks untuk notulen AI. Misalnya orang yang terlibat, gambaran rapat, tujuan, dll..."></textarea>
+            </div>
           </div>
         </div>
 
@@ -77,6 +81,14 @@
 
         <div id="panel-record" role="tabpanel" aria-labelledby="tab-record" class="bg-white rounded-lg border border-gray-200 p-6 shadow-sm" {{if ne .Data.Mode "record"}}hidden{{end}}>
           <h3 class="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">{{icon "mic" "h-5 w-5 text-red-600"}}Rekam dari Mikrofon</h3>
+          <div class="space-y-2 mb-4">
+            <div class="flex items-center justify-between">
+              <label for="mic" class="text-sm font-medium text-gray-900">Mikrofon</label>
+              <button type="button" id="mic-refresh" class="h-8 w-8 p-0 inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-gray-100" title="Muat ulang daftar mikrofon" aria-label="Muat ulang daftar mikrofon">{{icon "refresh-cw" "h-4 w-4"}}</button>
+            </div>
+            <select id="mic" class="select"><option value="">Mikrofon bawaan</option></select>
+            <p class="text-xs text-gray-500">Nama mikrofon muncul setelah izin mikrofon diberikan.</p>
+          </div>
           <label class="flex items-start gap-3 p-4 border rounded-lg bg-gray-50 cursor-pointer">
             <input type="checkbox" class="checkbox" id="consent" name="consent_confirmed">
             <span class="text-sm text-gray-700">Saya sudah memberi tahu semua peserta bahwa rapat ini direkam.</span>
@@ -95,12 +107,23 @@
     </div>
   </div>
 
+  <div id="drop-overlay" class="drop-overlay" hidden>
+    <div class="drop-overlay-box">
+      {{icon "upload"}}
+      <p class="text-xl font-medium text-white">Lepaskan file audio untuk diunggah</p>
+      <p class="text-sm mt-2" style="color: #93c5fd">MP3, M4A, WAV, AAC, OGG, FLAC, WebM, MP4</p>
+    </div>
+  </div>
+
   <div id="record-bar" class="fixed bottom-12 left-0 right-0 z-10" {{if ne .Data.Mode "record"}}hidden{{end}}>
     <div class="fixed-bar flex justify-center pl-8">
       <div class="w-2/3 max-w-[750px] flex justify-center">
         <div class="bg-white rounded-full shadow-lg flex items-center">
           <div class="flex items-center space-x-2 bg-white rounded-full shadow-lg px-4 py-2">
             <button type="button" id="record-start" class="w-12 h-12 flex items-center justify-center bg-red-500 hover:bg-red-600 rounded-full text-white transition-colors relative" title="Mulai rekam" aria-label="Mulai rekam">{{icon "mic" "w-5 h-5"}}</button>
+            <button type="button" id="record-pause" class="w-10 h-10 flex items-center justify-center bg-white border-2 border-gray-300 text-gray-600 hover:border-gray-400 hover:bg-gray-50 rounded-full transition-colors relative" title="Jeda" aria-label="Jeda rekaman" hidden>
+              <span data-icon="pause">{{icon "pause" "w-4 h-4"}}</span><span data-icon="play" hidden>{{icon "play" "w-4 h-4"}}</span>
+            </button>
             <button type="button" id="record-stop" class="w-10 h-10 flex items-center justify-center bg-red-500 hover:bg-red-600 rounded-full text-white transition-colors relative" title="Berhenti" aria-label="Berhenti merekam" hidden>{{icon "square" "w-4 h-4"}}</button>
             <div class="text-sm text-gray-600 min-w-[40px] tabular-nums px-2" id="record-clock">00:00:00</div>
             <div class="flex items-center space-x-1 mx-4" aria-hidden="true">
@@ -153,6 +176,7 @@
       meeting_date: form.meeting_date.value,
       template_id: form.template_id.value,
       participant_ids: picker.values(),
+      summary_context: form.summary_context.value.trim(),
     };
   }
 
@@ -194,6 +218,36 @@
     document.getElementById('file-info').hidden = false;
   });
 
+  // Drag a file anywhere on the page, like Meetily's ImportDropOverlay.
+  const overlay = document.getElementById('drop-overlay');
+  let dragDepth = 0;
+  const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  window.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e) || recording || xhr) return;
+    dragDepth++;
+    overlay.hidden = false;
+  });
+  window.addEventListener('dragleave', (e) => {
+    if (!hasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) overlay.hidden = true;
+  });
+  window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+  window.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    overlay.hidden = true;
+    if (recording || xhr) return;
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    setMode('upload');
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    fileInput.dispatchEvent(new Event('change'));
+  });
+
   let xhr = null;
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -209,6 +263,7 @@
     data.append('meeting_date', f.meeting_date);
     data.append('template_id', f.template_id);
     for (const id of f.participant_ids) data.append('participant_ids', id);
+    data.append('summary_context', f.summary_context);
     data.append('file', file);
 
     const bar = document.getElementById('upload-bar');
@@ -259,10 +314,39 @@
   const startBtn = document.getElementById('record-start');
   const stopBtn = document.getElementById('record-stop');
 
-  document.getElementById('consent').addEventListener('change', async (e) => {
-    if (!e.target.checked) return;
-    const err = await recorder.preview();
+  const micSelect = document.getElementById('mic');
+  async function fillDevices() {
+    if (!navigator.mediaDevices) return;
+    const devices = await recorder.listDevices();
+    micSelect.replaceChildren(...devices.map((d, i) => App.el('option', {
+      value: d.deviceId, text: d.label || `Mikrofon ${i + 1}`, selected: d.deviceId === recorder.deviceId,
+    })));
+    if (devices.length === 0) micSelect.append(App.el('option', { value: '', text: 'Mikrofon tidak ditemukan' }));
+  }
+  async function openMic() {
+    const err = await recorder.preview(micSelect.value || undefined);
     showRecordError(err || '');
+    if (!err) fillDevices();
+  }
+  document.getElementById('consent').addEventListener('change', (e) => { if (e.target.checked) openMic(); });
+  document.getElementById('mic-refresh').addEventListener('click', fillDevices);
+  micSelect.addEventListener('change', async () => {
+    if (!recorder.stream) return;
+    const err = await recorder.switchDevice(micSelect.value);
+    showRecordError(err || '');
+  });
+  if (navigator.mediaDevices) navigator.mediaDevices.addEventListener('devicechange', fillDevices);
+
+  const pauseBtn = document.getElementById('record-pause');
+  pauseBtn.addEventListener('click', () => {
+    if (recorder.paused) recorder.resume(); else recorder.pause();
+    const paused = recorder.paused;
+    pauseBtn.querySelector('[data-icon="pause"]').hidden = paused;
+    pauseBtn.querySelector('[data-icon="play"]').hidden = !paused;
+    pauseBtn.title = paused ? 'Lanjutkan' : 'Jeda';
+    pauseBtn.setAttribute('aria-label', paused ? 'Lanjutkan rekaman' : 'Jeda rekaman');
+    document.querySelector('#record-warning p').textContent = paused
+      ? 'Rekaman dijeda. Jangan tutup tab ini.' : 'Sedang merekam. Jangan tutup tab ini.';
   });
 
   startBtn.addEventListener('click', async () => {
@@ -279,6 +363,7 @@
     if (err) { showRecordError(err); return; }
     recording = true;
     startBtn.hidden = true;
+    pauseBtn.hidden = false;
     stopBtn.hidden = false;
     document.getElementById('record-warning').hidden = false;
     form.querySelectorAll('input, select, button').forEach((n) => { if (!n.closest('#record-bar')) n.disabled = true; });

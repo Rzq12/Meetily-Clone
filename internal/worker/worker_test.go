@@ -3,10 +3,12 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -148,6 +150,71 @@ func TestEmptyLLMOutputHasOwnMessage(t *testing.T) {
 	w.ProcessNext(context.Background())
 	if _, _, msg := status(t, pool, id); msg == nil || *msg != "AI tidak menghasilkan notulen." {
 		t.Fatalf("msg=%v", msg)
+	}
+}
+
+func TestCancelRunningJob(t *testing.T) {
+	pool := testutil.DB(t)
+	owner := testutil.User(t, pool, "notulis", "notetaker")
+	tmpl := testutil.Template(t, pool, "T", true)
+	id := readyMeeting(t, pool, owner.ID, tmpl, "Rapat", time.Now())
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	w := newWorker(t, pool, &llmStub{})
+	w.LLM = llm.NewClient(srv.URL, "m", "")
+
+	done := make(chan struct{})
+	go func() { w.ProcessNext(context.Background()); close(done) }()
+	<-started
+	if w.Cancel("00000000-0000-0000-0000-000000000000") {
+		t.Fatal("cancel of another meeting must return false")
+	}
+	if !w.Cancel(id) {
+		t.Fatal("cancel of the running meeting must return true")
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("worker did not stop after cancel")
+	}
+	s, _, msg := status(t, pool, id)
+	if s != "failed" || msg == nil || *msg != "Pemrosesan dibatalkan." {
+		t.Fatalf("status=%s msg=%v", s, msg)
+	}
+	if w.Cancel(id) {
+		t.Fatal("nothing should be running after the job ended")
+	}
+}
+
+func TestContextReachesLLM(t *testing.T) {
+	pool := testutil.DB(t)
+	owner := testutil.User(t, pool, "notulis", "notetaker")
+	tmpl := testutil.Template(t, pool, "T", true)
+	id := readyMeeting(t, pool, owner.ID, tmpl, "Rapat", time.Now())
+	pool.Exec(context.Background(), `UPDATE meetings SET summary_context = 'Budi adalah CFO' WHERE id = $1`, id)
+
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		body = string(raw)
+		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": "## Ringkasan\nok"}}}})
+	}))
+	defer srv.Close()
+	w := newWorker(t, pool, &llmStub{})
+	w.LLM = llm.NewClient(srv.URL, "m", "")
+	w.ProcessNext(context.Background())
+	if !strings.Contains(body, "Budi adalah CFO") {
+		t.Fatalf("LLM request lacks the notetaker context: %s", body)
 	}
 }
 

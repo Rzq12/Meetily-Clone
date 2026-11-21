@@ -162,6 +162,7 @@ func run() error {
 		PollInterval:   5 * time.Second,
 		Now:            time.Now,
 	}
+	meetings.CancelJob = w.Cancel
 	if err := w.RequeueInterrupted(ctx); err != nil {
 		return fmt.Errorf("requeue: %w", err)
 	}
@@ -202,6 +203,9 @@ func run() error {
 	app.HandleFunc("POST /api/meetings/{id}/restore-backup", meetings.RestoreBackup)
 	app.HandleFunc("POST /api/meetings/{id}/retry", meetings.Retry)
 	app.HandleFunc("PUT /api/meetings/{id}/participants", meetings.SetParticipants)
+	app.HandleFunc("PUT /api/meetings/{id}/title", meetings.SaveTitle)
+	app.HandleFunc("PUT /api/meetings/{id}/context", meetings.SaveContext)
+	app.HandleFunc("POST /api/meetings/{id}/cancel", meetings.Cancel)
 	app.HandleFunc("GET /api/meetings/{id}/export", meetings.Export)
 	app.HandleFunc("DELETE /api/meetings/{id}", meetings.Delete)
 	app.HandleFunc("POST /api/markdown/preview", meetings.Preview)
