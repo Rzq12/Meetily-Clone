@@ -1,0 +1,112 @@
+{{define "content"}}
+<div class="h-screen bg-gray-50 flex flex-col">
+  {{template "admin_header" .}}
+  <div class="flex-1 overflow-y-auto custom-scrollbar">
+    <div class="max-w-6xl mx-auto p-8 pt-6 page-enter">
+      <div class="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+        <div class="flex items-center justify-between gap-4 mb-6">
+          <div>
+            <h3 class="text-lg font-semibold text-gray-900 mb-2">Pengguna</h3>
+            <p class="text-sm text-gray-600">Setiap pengguna memiliki satu peran: Admin, Notulis, atau Pembaca.</p>
+          </div>
+          <button type="button" class="btn btn-default" id="add-user">{{icon "plus"}}Tambah Pengguna</button>
+        </div>
+        <div id="state-loading" class="flex items-center justify-center p-8"><div class="spinner-lg"></div></div>
+        <div id="state-error" class="bg-red-50 border border-red-200 rounded-lg p-3" hidden><p class="text-sm text-red-800"></p></div>
+        <div id="state-empty" class="text-center text-sm text-gray-500 p-8" hidden>Belum ada pengguna.</div>
+        <div id="state-list" class="overflow-x-auto" hidden>
+          <table class="table">
+            <thead><tr><th>Nama</th><th>Username</th><th>Peran</th><th>Status</th><th class="text-right">Aksi</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<template id="tpl-pencil">{{icon "pencil"}}</template>
+<template id="tpl-users-icon">{{icon "users" "text-blue-600"}}</template>
+{{end}}
+
+{{define "scripts"}}
+<script>
+'use strict';
+(() => {
+  const el = App.el;
+  const me = document.body.dataset.userId;
+  const roleLabels = { admin: 'Admin', notetaker: 'Notulis', viewer: 'Pembaca' };
+  const states = ['loading', 'error', 'empty', 'list'].reduce((m, k) => (m[k] = document.getElementById('state-' + k), m), {});
+  const show = (s) => { for (const [k, n] of Object.entries(states)) n.hidden = k !== s; };
+  const tplIcon = (id) => document.getElementById(id).content.firstElementChild.cloneNode(true);
+
+  async function load() {
+    show('loading');
+    const res = await App.api('GET', '/api/users');
+    if (!res.ok) { states.error.querySelector('p').textContent = res.data.error || 'Gagal memuat pengguna.'; show('error'); return; }
+    if (res.data.items.length === 0) { show('empty'); return; }
+    document.getElementById('rows').replaceChildren(...res.data.items.map((u) => el('tr', {}, [
+      el('td', { class: 'font-medium text-gray-900', text: u.full_name + (u.id === me ? ' (Anda)' : '') }),
+      el('td', { class: 'text-gray-600 font-mono text-xs', text: u.username }),
+      el('td', { class: 'text-gray-600', text: roleLabels[u.role] }),
+      el('td', {}, el('span', { class: 'badge ' + (u.is_active ? 'badge-done' : 'badge-queued'), text: u.is_active ? 'Aktif' : 'Nonaktif' })),
+      el('td', { class: 'text-right' }, el('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => openForm(u) }, [tplIcon('tpl-pencil'), 'Edit'])),
+    ])));
+    show('list');
+  }
+
+  function field(label, input, hint) {
+    return el('div', { class: 'space-y-2' }, [el('label', { class: 'label', for: input.id, text: label }), input, hint ? el('p', { class: 'text-xs text-gray-500', text: hint }) : null]);
+  }
+
+  function openForm(user) {
+    const isNew = !user;
+    const self = user && user.id === me;
+    const form = el('form', { class: 'space-y-4', novalidate: true });
+    const username = el('input', { id: 'f-username', name: 'username', class: 'input', maxlength: 50, autocomplete: 'off', disabled: !isNew });
+    const fullName = el('input', { id: 'f-full_name', name: 'full_name', class: 'input', maxlength: 255 });
+    const role = el('select', { id: 'f-role', name: 'role', class: 'select', disabled: self },
+      Object.entries(roleLabels).map(([v, t]) => el('option', { value: v, text: t })));
+    const password = el('input', { id: 'f-password', name: 'password', type: 'password', class: 'input', maxlength: 128, autocomplete: 'new-password' });
+    const active = el('input', { type: 'checkbox', class: 'checkbox', id: 'f-active', disabled: self });
+    if (user) { username.value = user.username; fullName.value = user.full_name; role.value = user.role; active.checked = user.is_active; }
+    else { role.value = 'notetaker'; active.checked = true; }
+
+    form.append(
+      field('Username', username, isNew ? 'Huruf, angka, titik, atau garis bawah. Tidak bisa diubah setelah dibuat.' : null),
+      field('Nama lengkap', fullName),
+      field('Peran', role, self ? 'Tidak bisa mengubah akun sendiri.' : null),
+      field(isNew ? 'Password awal' : 'Password baru', password, isNew ? '8–128 karakter.' : 'Kosongkan jika tidak diubah. Mengganti password mengakhiri sesi pengguna.'),
+    );
+    if (!isNew) {
+      form.append(el('label', { class: 'flex items-start gap-3 cursor-pointer', for: 'f-active' }, [active, el('span', { class: 'text-sm text-gray-700', text: 'Akun aktif. Menonaktifkan akun mengakhiri semua sesinya.' })]));
+    }
+    const save = el('button', { type: 'submit', class: 'btn btn-blue', text: 'Simpan' });
+    const cancel = el('button', { type: 'button', class: 'btn btn-outline', text: 'Batal' });
+    const d = App.dialog({ title: [tplIcon('tpl-users-icon'), isNew ? 'Tambah Pengguna' : 'Edit Pengguna'], content: form, footer: [cancel, save] });
+    cancel.addEventListener('click', d.close);
+    save.addEventListener('click', (e) => { e.preventDefault(); submit(); });
+    form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
+
+    async function submit() {
+      save.disabled = true;
+      const body = { full_name: fullName.value.trim(), role: role.value, password: password.value };
+      const res = isNew
+        ? await App.api('POST', '/api/users', { ...body, username: username.value.trim() })
+        : await App.api('PUT', '/api/users/' + user.id, { ...body, is_active: active.checked });
+      save.disabled = false;
+      if (!res.ok) {
+        App.showFieldErrors(form, res.data.fields);
+        App.toast('error', res.data.error || 'Pengguna gagal disimpan.');
+        return;
+      }
+      d.close();
+      App.toast('success', 'Pengguna tersimpan.');
+      load();
+    }
+  }
+
+  document.getElementById('add-user').addEventListener('click', () => openForm(null));
+  load();
+})();
+</script>
+{{end}}

@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Bound to localhost only, so `go run ./cmd/server` on the host can reach it during development.
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  whisper:
+    image: ghcr.io/ggml-org/whisper.cpp:main-cuda
+    restart: unless-stopped
+    command: >-
+      whisper-server --host 0.0.0.0 --port 8080
+      -m /models/ggml-large-v3-turbo.bin -l id
+      --vad -vm /models/ggml-silero-v5.1.2.bin
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "127.0.0.1:8081:8080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ollama:
+    image: ollama/ollama:0.5.7
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - whisper
+      - ollama
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATA_DIR: /data
+      WHISPER_URL: http://whisper:8080
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434/v1}
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_TOKEN_THRESHOLD: ${LLM_TOKEN_THRESHOLD:-6000}
+      AUDIO_RETENTION_DAYS: ${AUDIO_RETENTION_DAYS:-90}
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      TZ: Asia/Jakarta
+    volumes:
+      - appdata:/data
+
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  ollama:
+  appdata:
+  caddy_data:
+  caddy_config:

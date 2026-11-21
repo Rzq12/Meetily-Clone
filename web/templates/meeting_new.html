@@ -1,0 +1,310 @@
+{{define "content"}}
+<div class="h-screen bg-gray-50 flex flex-col">
+  <div class="sticky top-0 z-10 bg-gray-50 border-b border-gray-200">
+    <div class="max-w-6xl mx-auto px-8 py-6">
+      <div class="flex items-center gap-4">
+        <a href="/meetings" class="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors" aria-label="Kembali ke daftar rapat">{{icon "arrow-left" "w-5 h-5"}}</a>
+        <h1 class="text-3xl font-bold">Rapat Baru</h1>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex-1 overflow-y-auto custom-scrollbar">
+    <div class="max-w-4xl mx-auto p-8 pt-6 pb-20 page-enter">
+      <div class="tabs-underline mb-6" role="tablist">
+        <button type="button" role="tab" class="tab-trigger" id="tab-upload" aria-controls="panel-upload" aria-selected="{{if eq .Data.Mode "upload"}}true{{else}}false{{end}}">{{icon "upload"}}Unggah File</button>
+        <button type="button" role="tab" class="tab-trigger" id="tab-record" aria-controls="panel-record" aria-selected="{{if eq .Data.Mode "record"}}true{{else}}false{{end}}">{{icon "mic"}}Rekam Langsung</button>
+      </div>
+
+      <form id="meeting-form" class="space-y-6" novalidate>
+        <div class="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+          <h3 class="text-lg font-semibold text-gray-900 mb-2">Informasi Rapat</h3>
+          <p class="text-sm text-gray-600 mb-6">Judul, tanggal, dan template dipakai untuk menyusun notulen.</p>
+          <div class="grid grid-cols-2 gap-4">
+            <div class="col-span-2 space-y-2">
+              <label for="title" class="label">Judul rapat</label>
+              <input id="title" name="title" class="input" maxlength="255" required placeholder="Rapat Bulanan Manajemen November 2026">
+            </div>
+            <div class="space-y-2">
+              <label for="meeting_date" class="label">Tanggal rapat</label>
+              <input id="meeting_date" name="meeting_date" type="date" class="input" required max="{{.Data.Today}}" value="{{.Data.Today}}">
+            </div>
+            <div class="space-y-2">
+              <label for="template_id" class="label">Template notulen</label>
+              <select id="template_id" name="template_id" class="select" required><option value="">Memuat template...</option></select>
+            </div>
+            <div class="col-span-2 space-y-2">
+              <span class="label">Peserta</span>
+              <p class="text-xs text-gray-500">Peserta bisa membuka notulen rapat ini.</p>
+              <div id="participants"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="panel-upload" role="tabpanel" aria-labelledby="tab-upload" class="bg-white rounded-lg border border-gray-200 p-6 shadow-sm" {{if ne .Data.Mode "upload"}}hidden{{end}}>
+          <h3 class="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">{{icon "upload" "h-5 w-5 text-blue-600"}}Unggah Rekaman</h3>
+          <input id="file" name="file" type="file" accept=".mp3,.m4a,.wav,.aac,.ogg,.flac,.webm,.mp4" hidden>
+          <div id="dropzone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
+            {{icon "file-audio" "h-12 w-12 text-gray-400 mx-auto mb-4"}}
+            <button type="button" class="btn btn-outline" id="choose-file">{{icon "upload"}}Pilih File Audio</button>
+            <p class="text-sm text-gray-500 mt-2">MP3, M4A, WAV, AAC, OGG, FLAC, WebM, MP4 · maksimal 1 GB atau 4 jam</p>
+          </div>
+          <div id="file-info" class="bg-gray-50 rounded-lg p-4 space-y-3" hidden>
+            <div class="flex items-start gap-3">
+              {{icon "file-audio" "h-8 w-8 text-blue-600 flex-shrink-0"}}
+              <div class="flex-1 min-w-0">
+                <p class="font-medium text-gray-900 truncate" id="file-name"></p>
+                <div class="flex items-center gap-4 text-sm text-gray-500 mt-1">
+                  <span class="flex items-center gap-1">{{icon "hard-drive" "h-3.5 w-3.5"}}<span id="file-size"></span></span>
+                  <span class="text-blue-600 font-medium" id="file-format"></span>
+                </div>
+              </div>
+              <button type="button" class="btn btn-outline btn-sm" id="change-file">Ganti File</button>
+            </div>
+          </div>
+          <div id="upload-progress" class="space-y-2 mt-4" hidden>
+            <div class="w-full bg-gray-200 rounded-full h-3">
+              <div class="bg-blue-600 h-3 rounded-full transition-all duration-300" id="upload-bar" style="width: 0%"></div>
+            </div>
+            <div class="flex justify-between text-xs text-gray-600"><span>Mengunggah...</span><span id="upload-percent">0%</span></div>
+          </div>
+          <div id="upload-error" class="bg-red-50 border border-red-200 rounded-lg p-3 mt-4" role="alert" hidden><p class="text-sm text-red-800"></p></div>
+          <div class="dialog-footer mt-6">
+            <button type="button" class="btn btn-outline" id="upload-cancel" hidden>{{icon "x"}}Batal</button>
+            <button type="submit" class="btn btn-blue" id="upload-submit">{{icon "upload"}}Unggah</button>
+          </div>
+        </div>
+
+        <div id="panel-record" role="tabpanel" aria-labelledby="tab-record" class="bg-white rounded-lg border border-gray-200 p-6 shadow-sm" {{if ne .Data.Mode "record"}}hidden{{end}}>
+          <h3 class="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">{{icon "mic" "h-5 w-5 text-red-600"}}Rekam dari Mikrofon</h3>
+          <label class="flex items-start gap-3 p-4 border rounded-lg bg-gray-50 cursor-pointer">
+            <input type="checkbox" class="checkbox" id="consent" name="consent_confirmed">
+            <span class="text-sm text-gray-700">Saya sudah memberi tahu semua peserta bahwa rapat ini direkam.</span>
+          </label>
+          <ul class="text-sm text-gray-600 mt-4 space-y-1">
+            <li>Audio dikirim ke server setiap 5 detik selama perekaman.</li>
+            <li>Perekaman berhenti otomatis setelah 4 jam.</li>
+            <li>Gunakan mikrofon konferensi USB untuk ruangan besar.</li>
+          </ul>
+          <div id="record-warning" class="bg-amber-50 border border-amber-200 rounded-lg p-3 mt-4 flex items-center gap-2" role="status" hidden>
+            {{icon "triangle-alert" "w-4 h-4 text-amber-600"}}<p class="text-sm text-amber-800">Sedang merekam. Jangan tutup tab ini.</p>
+          </div>
+          <div id="record-error" class="bg-red-50 border border-red-200 rounded-lg p-3 mt-4" role="alert" hidden><p class="text-sm text-red-800"></p></div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="record-bar" class="fixed bottom-12 left-0 right-0 z-10" {{if ne .Data.Mode "record"}}hidden{{end}}>
+    <div class="fixed-bar flex justify-center pl-8">
+      <div class="w-2/3 max-w-[750px] flex justify-center">
+        <div class="bg-white rounded-full shadow-lg flex items-center">
+          <div class="flex items-center space-x-2 bg-white rounded-full shadow-lg px-4 py-2">
+            <button type="button" id="record-start" class="w-12 h-12 flex items-center justify-center bg-red-500 hover:bg-red-600 rounded-full text-white transition-colors relative" title="Mulai rekam" aria-label="Mulai rekam">{{icon "mic" "w-5 h-5"}}</button>
+            <button type="button" id="record-stop" class="w-10 h-10 flex items-center justify-center bg-red-500 hover:bg-red-600 rounded-full text-white transition-colors relative" title="Berhenti" aria-label="Berhenti merekam" hidden>{{icon "square" "w-4 h-4"}}</button>
+            <div class="text-sm text-gray-600 min-w-[40px] tabular-nums px-2" id="record-clock">00:00:00</div>
+            <div class="flex items-center space-x-1 mx-4" aria-hidden="true">
+              <div class="level-bar"></div><div class="level-bar"></div><div class="level-bar"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script src="/static/recorder.js"></script>
+<script>
+'use strict';
+(async () => {
+  const form = document.getElementById('meeting-form');
+  const currentUser = document.body.dataset.userId;
+  const allowed = ['mp3', 'm4a', 'wav', 'aac', 'ogg', 'flac', 'webm', 'mp4'];
+  let mode = document.getElementById('tab-record').getAttribute('aria-selected') === 'true' ? 'record' : 'upload';
+  let recording = false;
+
+  const [templates, users] = await Promise.all([App.api('GET', '/api/templates'), App.api('GET', '/api/users/options')]);
+  const select = form.template_id;
+  if (templates.ok) {
+    select.replaceChildren(...templates.data.items.map((t) => App.el('option', { value: t.id, text: t.name + (t.is_default ? ' (default)' : ''), selected: t.is_default })));
+  } else {
+    select.replaceChildren(App.el('option', { value: '', text: 'Gagal memuat template' }));
+  }
+  const picker = App.participantPicker(document.getElementById('participants'), users.ok ? users.data.items : [], [], currentUser);
+
+  function setMode(next) {
+    if (recording) return;
+    mode = next;
+    for (const m of ['upload', 'record']) {
+      document.getElementById('tab-' + m).setAttribute('aria-selected', String(m === mode));
+      document.getElementById('panel-' + m).hidden = m !== mode;
+    }
+    document.getElementById('record-bar').hidden = mode !== 'record';
+    history.replaceState(null, '', mode === 'record' ? '?mode=record' : location.pathname);
+  }
+  document.getElementById('tab-upload').addEventListener('click', () => setMode('upload'));
+  document.getElementById('tab-record').addEventListener('click', () => setMode('record'));
+
+  function fields() {
+    return {
+      title: form.title.value.trim(),
+      meeting_date: form.meeting_date.value,
+      template_id: form.template_id.value,
+      participant_ids: picker.values(),
+    };
+  }
+
+  function checkFields(f) {
+    const errors = {};
+    if (!f.title) errors.title = 'Judul wajib diisi.';
+    if (!f.meeting_date) errors.meeting_date = 'Tanggal rapat wajib diisi.';
+    else if (f.meeting_date > form.meeting_date.max) errors.meeting_date = 'Tanggal rapat tidak boleh melebihi hari ini.';
+    if (!f.template_id) errors.template_id = 'Pilih template.';
+    App.showFieldErrors(form, errors);
+    return Object.keys(errors).length === 0;
+  }
+
+  // Upload, with progress through XMLHttpRequest (FR-003).
+  const fileInput = form.file;
+  const uploadError = document.getElementById('upload-error');
+  const showUploadError = (msg) => { uploadError.querySelector('p').textContent = msg; uploadError.hidden = !msg; };
+  document.getElementById('choose-file').addEventListener('click', () => fileInput.click());
+  document.getElementById('change-file').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files[0];
+    showUploadError('');
+    if (!file) return;
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!allowed.includes(ext)) {
+      showUploadError('Format file tidak didukung. Gunakan mp3, m4a, wav, aac, ogg, flac, webm, atau mp4.');
+      fileInput.value = '';
+      return;
+    }
+    if (file.size > 1024 * 1024 * 1024) {
+      showUploadError('File melebihi batas 1 GB atau 4 jam.');
+      fileInput.value = '';
+      return;
+    }
+    document.getElementById('file-name').textContent = file.name;
+    document.getElementById('file-size').textContent = (file.size / 1024 / 1024).toFixed(1) + ' MB';
+    document.getElementById('file-format').textContent = ext.toUpperCase();
+    document.getElementById('dropzone').hidden = true;
+    document.getElementById('file-info').hidden = false;
+  });
+
+  let xhr = null;
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (mode !== 'upload' || xhr) return;
+    const f = fields();
+    if (!checkFields(f)) return;
+    const file = fileInput.files[0];
+    if (!file) { showUploadError('Pilih file rekaman.'); return; }
+    showUploadError('');
+
+    const data = new FormData();
+    data.append('title', f.title);
+    data.append('meeting_date', f.meeting_date);
+    data.append('template_id', f.template_id);
+    for (const id of f.participant_ids) data.append('participant_ids', id);
+    data.append('file', file);
+
+    const bar = document.getElementById('upload-bar');
+    const pct = document.getElementById('upload-percent');
+    const submit = document.getElementById('upload-submit');
+    const cancel = document.getElementById('upload-cancel');
+    document.getElementById('upload-progress').hidden = false;
+    submit.disabled = true;
+    cancel.hidden = false;
+
+    xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/meetings');
+    xhr.setRequestHeader('X-CSRF-Token', App.csrf);
+    xhr.upload.addEventListener('progress', (ev) => {
+      if (!ev.lengthComputable) return;
+      const p = Math.round((ev.loaded / ev.total) * 100);
+      bar.style.width = p + '%';
+      pct.textContent = p + '%';
+    });
+    const done = () => { xhr = null; submit.disabled = false; cancel.hidden = true; document.getElementById('upload-progress').hidden = true; };
+    xhr.addEventListener('load', () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch (err) {}
+      if (xhr.status === 401) { window.location.href = '/login?expired=1'; return; }
+      if (xhr.status === 201) {
+        App.flash('success', 'Rekaman berhasil diunggah dan masuk antrean.');
+        window.location.href = '/meetings/' + body.id;
+        return;
+      }
+      done();
+      showUploadError(body.error || 'Unggahan gagal.');
+    });
+    xhr.addEventListener('error', () => { done(); showUploadError('Unggahan terputus. Coba lagi.'); });
+    xhr.addEventListener('abort', () => { done(); App.toast('info', 'Unggahan dibatalkan.'); });
+    xhr.send(data);
+  });
+  document.getElementById('upload-cancel').addEventListener('click', () => { if (xhr) xhr.abort(); });
+
+  // Browser recording (FR-004).
+  const recordError = document.getElementById('record-error');
+  const showRecordError = (msg) => { recordError.querySelector('p').textContent = msg; recordError.hidden = !msg; };
+  const recorder = new Recorder({
+    bars: document.querySelectorAll('#record-bar .level-bar'),
+    clock: document.getElementById('record-clock'),
+    onWarning: (msg) => msg ? App.toast('warning', msg) : null,
+    onFatal: (msg) => { showRecordError(msg); App.toast('error', msg); },
+  });
+  const startBtn = document.getElementById('record-start');
+  const stopBtn = document.getElementById('record-stop');
+
+  document.getElementById('consent').addEventListener('change', async (e) => {
+    if (!e.target.checked) return;
+    const err = await recorder.preview();
+    showRecordError(err || '');
+  });
+
+  startBtn.addEventListener('click', async () => {
+    showRecordError('');
+    const f = fields();
+    if (!checkFields(f)) return;
+    if (!document.getElementById('consent').checked) {
+      showRecordError('Konfirmasi bahwa peserta sudah diberi tahu rapat direkam.');
+      return;
+    }
+    startBtn.disabled = true;
+    const err = await recorder.start(f);
+    startBtn.disabled = false;
+    if (err) { showRecordError(err); return; }
+    recording = true;
+    startBtn.hidden = true;
+    stopBtn.hidden = false;
+    document.getElementById('record-warning').hidden = false;
+    form.querySelectorAll('input, select, button').forEach((n) => { if (!n.closest('#record-bar')) n.disabled = true; });
+    App.toast('info', 'Sedang merekam. Jangan tutup tab ini.');
+  });
+
+  async function finish(askFirst) {
+    if (askFirst) {
+      const ok = await App.confirm({ title: 'Berhenti merekam?', text: 'Rekaman akan diakhiri dan dimasukkan ke antrean pemrosesan.', confirmLabel: 'Berhenti', destructive: true });
+      if (!ok) return;
+    }
+    stopBtn.disabled = true;
+    const result = await recorder.stop();
+    if (result.error) {
+      stopBtn.disabled = false;
+      showRecordError(result.error);
+      return;
+    }
+    recording = false;
+    App.flash('success', 'Rekaman selesai dan masuk antrean.');
+    window.location.href = '/meetings/' + result.id;
+  }
+  stopBtn.addEventListener('click', () => finish(true));
+  recorder.onLimit = () => finish(false);
+
+  window.addEventListener('beforeunload', (e) => { if (recording) { e.preventDefault(); e.returnValue = ''; } });
+})();
+</script>
+{{end}}

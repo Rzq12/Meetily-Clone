@@ -1,0 +1,154 @@
+{{define "content"}}
+<div class="h-screen bg-gray-50 flex flex-col">
+  {{template "admin_header" .}}
+  <div class="flex-1 overflow-y-auto custom-scrollbar">
+    <div class="max-w-6xl mx-auto p-8 pt-6 page-enter">
+      <div class="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+        <div class="flex items-center justify-between gap-4 mb-6">
+          <div>
+            <h3 class="text-lg font-semibold text-gray-900 mb-2">Template Notulen</h3>
+            <p class="text-sm text-gray-600">Setiap bagian menjadi judul di notulen. AI mengisi bagian sesuai instruksinya.</p>
+          </div>
+          <button type="button" class="btn btn-default" id="add-template">{{icon "plus"}}Tambah Template</button>
+        </div>
+        <div id="state-loading" class="flex items-center justify-center p-8"><div class="spinner-lg"></div></div>
+        <div id="state-error" class="bg-red-50 border border-red-200 rounded-lg p-3" hidden><p class="text-sm text-red-800"></p></div>
+        <div id="state-list" class="space-y-4" hidden></div>
+      </div>
+    </div>
+  </div>
+</div>
+<template id="tpl-i">
+  <span data-i="pencil">{{icon "pencil"}}</span>
+  <span data-i="trash">{{icon "trash-2"}}</span>
+  <span data-i="check">{{icon "check"}}</span>
+  <span data-i="up">{{icon "chevron-up"}}</span>
+  <span data-i="down">{{icon "chevron-down"}}</span>
+  <span data-i="x">{{icon "x"}}</span>
+  <span data-i="plus">{{icon "plus"}}</span>
+  <span data-i="title">{{icon "file-text" "text-blue-600"}}</span>
+</template>
+{{end}}
+
+{{define "scripts"}}
+<script>
+'use strict';
+(() => {
+  const el = App.el;
+  const icon = (n) => document.getElementById('tpl-i').content.querySelector(`[data-i="${n}"]`).firstElementChild.cloneNode(true);
+  const formatLabels = { paragraph: 'Paragraf', list: 'Daftar', table: 'Tabel' };
+  const states = ['loading', 'error', 'list'].reduce((m, k) => (m[k] = document.getElementById('state-' + k), m), {});
+  const show = (s) => { for (const [k, n] of Object.entries(states)) n.hidden = k !== s; };
+
+  async function load() {
+    show('loading');
+    const res = await App.api('GET', '/api/templates');
+    if (!res.ok) { states.error.querySelector('p').textContent = res.data.error || 'Gagal memuat template.'; show('error'); return; }
+    states.list.replaceChildren(...res.data.items.map((t) => el('div', { class: 'p-4 border rounded-lg bg-gray-50' }, [
+      el('div', { class: 'flex items-start justify-between gap-4' }, [
+        el('div', { class: 'min-w-0' }, [
+          el('div', { class: 'flex items-center gap-2' }, [
+            el('span', { class: 'font-medium text-gray-900', text: t.name }),
+            t.is_default ? el('span', { class: 'badge badge-done', text: 'Default' }) : null,
+            t.in_use ? el('span', { class: 'badge badge-queued', text: 'Dipakai rapat' }) : null,
+          ]),
+          t.description ? el('p', { class: 'text-sm text-gray-600 mt-1', text: t.description }) : null,
+          el('p', { class: 'text-xs text-gray-500 mt-2', text: t.sections.map((s) => s.title).join(' · ') }),
+        ]),
+        el('div', { class: 'btn-group flex-shrink-0' }, [
+          t.is_default ? null : el('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => setDefault(t) }, [icon('check'), 'Jadikan Default']),
+          el('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => openEditor(t) }, [icon('pencil'), 'Edit']),
+          t.is_default || t.in_use ? null : el('button', { type: 'button', class: 'btn btn-outline btn-sm hover:text-red-600', onclick: () => remove(t) }, [icon('trash'), 'Hapus']),
+        ]),
+      ]),
+    ])));
+    show('list');
+  }
+
+  async function setDefault(t) {
+    const res = await App.api('PUT', '/api/templates/' + t.id, { set_default: true });
+    if (!res.ok) { App.toast('error', res.data.error || 'Gagal mengubah default.'); return; }
+    App.toast('success', 'Template tersimpan.');
+    load();
+  }
+
+  async function remove(t) {
+    const ok = await App.confirm({ title: 'Hapus template?', text: `Template "${t.name}" akan dihapus permanen.`, confirmLabel: 'Hapus', destructive: true });
+    if (!ok) return;
+    const res = await App.api('DELETE', '/api/templates/' + t.id);
+    if (!res.ok) { App.toast('error', res.data.error || 'Gagal menghapus template.'); return; }
+    App.toast('success', 'Template dihapus.');
+    load();
+  }
+
+  function openEditor(t) {
+    const isNew = !t;
+    const sections = t ? t.sections.map((s) => ({ ...s })) : [{ title: '', instruction: '', format: 'paragraph', item_format: '' }];
+    const name = el('input', { class: 'input', id: 't-name', maxlength: 100, value: t ? t.name : '' });
+    const desc = el('textarea', { class: 'textarea', id: 't-desc', maxlength: 500, rows: 2 });
+    desc.value = t ? t.description : '';
+    const list = el('div', { class: 'space-y-3' });
+
+    function renderSections() {
+      list.replaceChildren(...sections.map((s, i) => {
+        const title = el('input', { class: 'input', maxlength: 100, placeholder: 'Judul bagian, misalnya Keputusan', 'aria-label': 'Judul bagian ' + (i + 1) });
+        title.value = s.title;
+        title.addEventListener('input', () => { s.title = title.value; });
+        const instruction = el('textarea', { class: 'textarea', maxlength: 1000, rows: 2, placeholder: 'Instruksi untuk AI', 'aria-label': 'Instruksi bagian ' + (i + 1) });
+        instruction.value = s.instruction;
+        instruction.addEventListener('input', () => { s.instruction = instruction.value; });
+        const format = el('select', { class: 'select w-40', 'aria-label': 'Format bagian ' + (i + 1) },
+          Object.entries(formatLabels).map(([v, l]) => el('option', { value: v, text: l, selected: s.format === v })));
+        const itemFormat = el('input', { class: 'input font-mono', maxlength: 500, placeholder: '| PIC | Tugas | Tenggat |', 'aria-label': 'Format kolom bagian ' + (i + 1), hidden: s.format !== 'table' });
+        itemFormat.value = s.item_format || '';
+        itemFormat.addEventListener('input', () => { s.item_format = itemFormat.value; });
+        format.addEventListener('change', () => { s.format = format.value; itemFormat.hidden = s.format !== 'table'; });
+        const move = (d) => { const j = i + d; [sections[i], sections[j]] = [sections[j], sections[i]]; renderSections(); };
+        return el('div', { class: 'p-3 border rounded-lg bg-gray-50 space-y-2' }, [
+          el('div', { class: 'flex items-center gap-2' }, [
+            el('span', { class: 'text-xs text-gray-500 w-6', text: String(i + 1) }), title, format,
+            el('div', { class: 'btn-group' }, [
+              el('button', { type: 'button', class: 'btn btn-outline btn-sm px-2', 'aria-label': 'Naikkan', disabled: i === 0, onclick: () => move(-1) }, icon('up')),
+              el('button', { type: 'button', class: 'btn btn-outline btn-sm px-2', 'aria-label': 'Turunkan', disabled: i === sections.length - 1, onclick: () => move(1) }, icon('down')),
+              el('button', { type: 'button', class: 'btn btn-outline btn-sm px-2 hover:text-red-600', 'aria-label': 'Hapus bagian', onclick: () => { sections.splice(i, 1); renderSections(); } }, icon('x')),
+            ]),
+          ]),
+          instruction, itemFormat,
+        ]);
+      }));
+    }
+    renderSections();
+
+    const content = el('div', { class: 'space-y-4 overflow-y-auto custom-scrollbar', style: 'max-height: 65vh' }, [
+      el('div', { class: 'space-y-2' }, [el('label', { class: 'label', for: 't-name', text: 'Nama template' }), name]),
+      el('div', { class: 'space-y-2' }, [el('label', { class: 'label', for: 't-desc', text: 'Deskripsi' }), desc]),
+      el('div', { class: 'space-y-2' }, [
+        el('span', { class: 'label', text: 'Bagian' }), list,
+        el('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => { sections.push({ title: '', instruction: '', format: 'list', item_format: '' }); renderSections(); } }, [icon('plus'), 'Tambah Bagian']),
+      ]),
+    ]);
+    const save = el('button', { type: 'button', class: 'btn btn-blue', text: 'Simpan' });
+    const cancel = el('button', { type: 'button', class: 'btn btn-outline', text: 'Batal' });
+    const d = App.dialog({ title: [icon('title'), isNew ? 'Tambah Template' : 'Edit Template'], content, footer: [cancel, save] });
+    d.root.querySelector('.dialog').style.maxWidth = '48rem';
+    cancel.addEventListener('click', d.close);
+    save.addEventListener('click', async () => {
+      const body = {
+        name: name.value.trim(), description: desc.value.trim(),
+        sections: sections.map((s) => ({ title: s.title.trim(), instruction: s.instruction.trim(), format: s.format, item_format: s.format === 'table' ? s.item_format.trim() : '' })),
+      };
+      save.disabled = true;
+      const res = isNew ? await App.api('POST', '/api/templates', body) : await App.api('PUT', '/api/templates/' + t.id, body);
+      save.disabled = false;
+      if (!res.ok) { App.toast('error', res.data.error || 'Template gagal disimpan.'); return; }
+      d.close();
+      App.toast('success', 'Template tersimpan.');
+      load();
+    });
+  }
+
+  document.getElementById('add-template').addEventListener('click', () => openEditor(null));
+  load();
+})();
+</script>
+{{end}}

@@ -1,0 +1,451 @@
+{{define "content"}}
+<div class="flex flex-col h-screen min-w-0 bg-gray-50 page-enter">
+  <div class="split-tabs shrink-0 bg-white px-2">
+    <div class="tabs-underline w-full justify-center" role="tablist">
+      <button type="button" role="tab" class="tab-trigger" data-split-tab="transcript" aria-selected="false">{{icon "file-text"}}Transkrip</button>
+      <button type="button" role="tab" class="tab-trigger" data-split-tab="summary" aria-selected="true">{{icon "sparkles"}}Notulen</button>
+    </div>
+  </div>
+
+  <div class="split" id="split" data-tab="summary">
+    <section class="split-transcript" aria-label="Transkrip">
+      <div class="flex h-full min-w-0 w-full bg-white flex-col relative">
+        <div class="p-4 border-b border-gray-200">
+          <div class="flex items-center justify-center w-full gap-2">
+            <div class="btn-group">
+              <button type="button" class="btn btn-outline btn-sm" id="copy-transcript" title="Salin transkrip" disabled>{{icon "copy"}}<span>Salin</span></button>
+              <a class="btn btn-outline btn-sm" id="download-audio" title="Unduh rekaman" download hidden>{{icon "download"}}<span>Rekaman</span></a>
+            </div>
+          </div>
+        </div>
+        <div class="px-4 pt-3" id="audio-box"></div>
+        <div class="flex-1 overflow-hidden pb-4">
+          <div class="flex flex-col h-full overflow-y-auto custom-scrollbar px-4 py-2" id="transcript"></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="split-separator" id="separator" role="separator" aria-orientation="vertical" aria-label="Ubah lebar transkrip dan notulen" tabindex="0"><div></div></div>
+
+    <section class="split-summary" aria-label="Notulen">
+      <div class="flex-1 min-w-0 flex flex-col bg-white overflow-hidden h-full w-full">
+        <div class="p-4 border-b border-gray-200">
+          <div class="flex items-center justify-center w-full min-w-0 gap-2 flex-wrap" id="toolbar"></div>
+        </div>
+        <div class="flex-1 overflow-y-auto overflow-x-auto min-h-0 custom-scrollbar" id="summary"></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<template id="tpl-icons">
+  <span data-i="sparkles">{{icon "sparkles"}}</span>
+  <span data-i="file-text">{{icon "file-text"}}</span>
+  <span data-i="check">{{icon "check" "text-green-600"}}</span>
+  <span data-i="save">{{icon "save"}}</span>
+  <span data-i="pencil">{{icon "pencil"}}</span>
+  <span data-i="copy">{{icon "copy"}}</span>
+  <span data-i="download">{{icon "download"}}</span>
+  <span data-i="users">{{icon "users"}}</span>
+  <span data-i="trash">{{icon "trash-2"}}</span>
+  <span data-i="rotate">{{icon "rotate-ccw"}}</span>
+  <span data-i="refresh">{{icon "refresh-cw"}}</span>
+  <span data-i="x">{{icon "x"}}</span>
+  <span data-i="question">{{icon "file-question" "w-16 h-16 text-gray-300 mb-4"}}</span>
+  <span data-i="alert">{{icon "circle-alert" "w-16 h-16 text-red-300 mb-4"}}</span>
+  <span data-i="mic">{{icon "mic" "w-16 h-16 text-gray-300 mb-4"}}</span>
+  <span data-i="info">{{icon "info" "w-4 h-4 text-blue-600 flex-shrink-0"}}</span>
+  <span data-i="calendar">{{icon "calendar" "w-4 h-4"}}</span>
+  <span data-i="user">{{icon "user" "w-4 h-4"}}</span>
+  <span data-i="clock">{{icon "clock" "w-4 h-4"}}</span>
+  <span data-i="trash-title">{{icon "trash-2" "text-red-600"}}</span>
+  <span data-i="users-title">{{icon "users" "text-blue-600"}}</span>
+</template>
+{{end}}
+
+{{define "scripts"}}
+<script>
+'use strict';
+(() => {
+  const el = App.el;
+  const icon = (name) => document.getElementById('tpl-icons').content.querySelector(`[data-i="${name}"]`).firstElementChild.cloneNode(true);
+  let m = {{json .Data}};
+  const isProcessing = (s) => s === 'queued' || s === 'transcribing' || s === 'summarizing';
+  let segments = [];
+  let templates = [];
+  let selectedTemplate = m.template_id;
+  let editing = false;
+  let dirty = false;
+  let pollTimer = null;
+  let audio = null;
+
+  // Split view ratio, as in MeetingDetailsSplitView (30–50%, stored per browser).
+  const split = document.getElementById('split');
+  const separator = document.getElementById('separator');
+  const KEY = 'notulensi.meetingDetails.transcriptPaneRatio';
+  const clamp = (v) => Math.min(0.5, Math.max(0.3, v));
+  let ratio = 0.3;
+  try { const n = Number(localStorage.getItem(KEY)); if (n >= 0.3 && n <= 0.5) ratio = n; } catch (e) {}
+  const applyRatio = () => {
+    split.style.setProperty('--transcript-pane-width', (ratio * 100) + '%');
+    separator.setAttribute('aria-valuenow', Math.round(ratio * 100));
+  };
+  const saveRatio = () => { try { localStorage.setItem(KEY, String(ratio)); } catch (e) {} };
+  applyRatio();
+  let dragging = false;
+  separator.addEventListener('pointerdown', (e) => { e.preventDefault(); dragging = true; separator.setPointerCapture(e.pointerId); });
+  separator.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const rect = split.getBoundingClientRect();
+    ratio = clamp((e.clientX - rect.left) / rect.width);
+    applyRatio();
+  });
+  separator.addEventListener('pointerup', () => { if (dragging) { dragging = false; saveRatio(); } });
+  separator.addEventListener('keydown', (e) => {
+    const next = { ArrowLeft: ratio - 0.05, ArrowRight: ratio + 0.05, Home: 0.3, End: 0.5 }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    ratio = clamp(next);
+    applyRatio();
+    saveRatio();
+  });
+  document.querySelectorAll('[data-split-tab]').forEach((b) => b.addEventListener('click', () => {
+    split.dataset.tab = b.dataset.splitTab;
+    document.querySelectorAll('[data-split-tab]').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+  }));
+
+  function seek(sec) {
+    if (!audio) { App.toast('info', 'Audio sudah dihapus sesuai kebijakan retensi.'); return; }
+    audio.currentTime = sec;
+    audio.play();
+  }
+
+  function renderAudio() {
+    const box = document.getElementById('audio-box');
+    const dl = document.getElementById('download-audio');
+    if (m.audio_deleted) {
+      box.replaceChildren(el('div', { class: 'bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center gap-2', role: 'status' },
+        [icon('info'), el('p', { class: 'text-sm text-blue-700', text: 'Audio sudah dihapus sesuai kebijakan retensi.' })]));
+      audio = null;
+      dl.hidden = true;
+      return;
+    }
+    if (m.status === 'recording') { box.replaceChildren(); audio = null; return; }
+    if (!audio) {
+      audio = el('audio', { class: 'player', controls: true, preload: 'metadata', src: `/api/meetings/${m.id}/audio` });
+      box.replaceChildren(audio);
+    }
+    dl.href = `/api/meetings/${m.id}/audio`;
+    dl.hidden = false;
+  }
+
+  async function loadTranscript() {
+    const list = document.getElementById('transcript');
+    list.replaceChildren(el('div', { class: 'flex items-center gap-2 text-gray-500 justify-center py-4' }, [el('div', { class: 'spinner-sm' }), el('span', { class: 'text-sm', text: 'Memuat transkrip...' })]));
+    const res = await App.api('GET', `/api/meetings/${m.id}/transcript`);
+    if (!res.ok) {
+      list.replaceChildren(el('div', { class: 'bg-red-50 border border-red-200 rounded-lg p-3 mt-4' }, el('p', { class: 'text-sm text-red-800', text: res.data.error || 'Gagal memuat transkrip.' })));
+      return;
+    }
+    segments = res.data.items;
+    document.getElementById('copy-transcript').disabled = segments.length === 0;
+    if (segments.length === 0) {
+      const msg = isProcessing(m.status) || m.status === 'recording' ? 'Transkrip muncul setelah rekaman ditranskripsi.' : 'Belum ada transkrip.';
+      list.replaceChildren(el('div', { class: 'text-center text-gray-500 mt-8' }, el('p', { class: 'text-sm', text: msg })));
+      return;
+    }
+    list.replaceChildren(...segments.map((s) => el('button', {
+      type: 'button', class: 'segment', title: 'Putar dari ' + s.label, onclick: () => seek(s.start_sec),
+    }, [el('span', { class: 'segment-time', text: s.label }), el('p', { text: s.text })])));
+  }
+
+  document.getElementById('copy-transcript').addEventListener('click', async () => {
+    await navigator.clipboard.writeText(segments.map((s) => `${s.label} ${s.text}`).join('\n'));
+    App.toast('success', 'Transkrip disalin.');
+  });
+
+  function button(label, iconName, onclick, extra = '') {
+    return el('button', { type: 'button', class: 'btn btn-outline btn-sm ' + extra, title: label, onclick }, [icon(iconName), el('span', { text: label })]);
+  }
+
+  function renderToolbar() {
+    const bar = document.getElementById('toolbar');
+    const groups = [];
+    const done = m.status === 'done';
+    if (m.can_edit && done && !editing) {
+      const menu = el('div', { class: 'dropdown-content', hidden: true },
+        templates.map((t) => el('button', {
+          type: 'button', class: 'dropdown-item', title: t.description,
+          onclick: () => { selectedTemplate = t.id; renderToolbar(); },
+        }, [el('span', { text: t.name }), t.id === selectedTemplate ? icon('check') : null])));
+      groups.push(el('div', { class: 'btn-group' }, [
+        button('Buat Ulang', 'sparkles', regenerate, 'btn-ai px-3'),
+        el('div', { class: 'dropdown' }, [
+          el('button', { type: 'button', class: 'btn btn-outline btn-sm', title: 'Pilih template', 'data-dropdown-trigger': true, 'aria-expanded': 'false' }, [icon('file-text'), el('span', { text: 'Template' })]),
+          menu,
+        ]),
+      ]));
+    }
+    if (done || (m.minutes_markdown && m.status === 'failed')) {
+      const items = [];
+      if (m.can_edit && done) {
+        items.push(editing
+          ? button('Simpan', 'save', saveMinutes, dirty ? 'btn-dirty' : '')
+          : button('Edit', 'pencil', startEdit));
+        if (editing) items.push(button('Batal', 'x', cancelEdit));
+      }
+      if (!editing) {
+        items.push(button('Salin', 'copy', async () => {
+          await navigator.clipboard.writeText(m.minutes_markdown || '');
+          App.toast('success', 'Notulen disalin.');
+        }));
+        items.push(el('div', { class: 'dropdown' }, [
+          el('button', { type: 'button', class: 'btn btn-outline btn-sm', title: 'Unduh notulen', 'data-dropdown-trigger': true, 'aria-expanded': 'false' }, [icon('download'), el('span', { text: 'Unduh' })]),
+          el('div', { class: 'dropdown-content', hidden: true }, [
+            el('a', { class: 'dropdown-item', href: `/api/meetings/${m.id}/export?format=docx` }, el('span', { text: 'Word (.docx)' })),
+            el('a', { class: 'dropdown-item', href: `/api/meetings/${m.id}/export?format=md` }, el('span', { text: 'Markdown (.md)' })),
+          ]),
+        ]));
+      }
+      groups.push(el('div', { class: 'btn-group' }, items));
+    }
+    if (m.can_edit && !editing) {
+      groups.push(el('div', { class: 'btn-group' }, [
+        button('Peserta', 'users', openParticipants),
+        el('button', { type: 'button', class: 'btn btn-outline btn-sm hover:text-red-600', title: 'Hapus rapat', onclick: openDelete, disabled: isProcessing(m.status) && m.status !== 'queued' }, [icon('trash'), el('span', { text: 'Hapus' })]),
+      ]));
+    }
+    bar.replaceChildren(...groups);
+  }
+
+  function header() {
+    const names = m.participants.map((p) => p.full_name).join(', ') || '-';
+    const meta = (ic, text) => el('span', { class: 'flex items-center gap-1' }, [icon(ic), el('span', { text })]);
+    return el('div', { class: 'mb-6' }, [
+      el('div', { class: 'flex items-start justify-between gap-4' }, [
+        el('h1', { class: 'text-2xl font-bold px-1 flex-1 whitespace-pre-wrap', text: m.title }),
+        el('span', { class: 'badge badge-' + m.status + ' mt-1', text: m.status_label }),
+      ]),
+      el('div', { class: 'flex flex-wrap items-center gap-4 text-sm text-gray-500 mt-2 px-1' }, [
+        meta('calendar', m.meeting_date_label),
+        meta('user', 'Notulis: ' + m.owner_name),
+        m.audio_duration_sec ? meta('clock', App.duration(m.audio_duration_sec)) : null,
+      ]),
+      el('p', { class: 'text-sm text-gray-500 mt-1 px-1', text: 'Peserta: ' + names }),
+    ]);
+  }
+
+  function centered(children) {
+    return el('div', { class: 'flex flex-col items-center justify-center h-full p-8 text-center' }, children);
+  }
+
+  function renderSummary() {
+    const box = document.getElementById('summary');
+    if (isProcessing(m.status)) {
+      const text = m.status === 'queued' ? `Dalam antrean (posisi ${m.queue_position}).`
+        : m.status === 'transcribing' ? 'Mentranskrip rekaman...' : 'Menyusun notulen...';
+      box.replaceChildren(el('div', { class: 'flex items-center justify-center h-full' }, el('div', { class: 'text-center' }, [
+        el('div', { class: 'spinner-lg mb-4' }),
+        el('p', { class: 'text-gray-600', text }),
+        el('p', { class: 'text-xs text-gray-400 mt-1', text: 'Halaman ini diperbarui otomatis.' }),
+      ])));
+      return;
+    }
+    if (m.status === 'recording') {
+      box.replaceChildren(centered([
+        icon('mic'),
+        el('h3', { class: 'text-lg font-semibold text-gray-900 mb-2', text: 'Rekaman belum diselesaikan' }),
+        el('p', { class: 'text-sm text-gray-500 mb-6 max-w-md', text: 'Perekaman di browser terhenti sebelum selesai. Audio yang sudah terkirim tersimpan di server.' }),
+        m.can_edit ? el('button', { type: 'button', class: 'btn btn-default gap-2', onclick: finishRecording }, [icon('refresh'), 'Proses rekaman yang tersimpan']) : null,
+      ]));
+      return;
+    }
+    if (!m.minutes_markdown) {
+      box.replaceChildren(centered([
+        icon(m.status === 'failed' ? 'alert' : 'question'),
+        el('h3', { class: 'text-lg font-semibold text-gray-900 mb-2', text: m.status === 'failed' ? 'Pemrosesan gagal' : 'Notulen belum tersedia' }),
+        m.error_message ? el('p', { role: 'alert', class: 'mb-4 max-w-md rounded-md bg-red-50 px-3 py-2 text-sm text-red-700', text: m.error_message }) : null,
+        m.can_edit && m.status === 'failed' ? el('button', { type: 'button', class: 'btn btn-default gap-2', onclick: retry }, [icon('refresh'), 'Proses Ulang']) : null,
+      ]));
+      return;
+    }
+
+    const content = el('div', { class: 'p-6 w-full' }, [header()]);
+    if (editing) {
+      const textarea = el('textarea', { class: 'textarea font-mono', style: 'min-height: 60vh', 'aria-label': 'Notulen (Markdown)' });
+      textarea.value = m.minutes_markdown;
+      const preview = el('div', { class: 'prose border rounded-lg p-4 overflow-y-auto', style: 'min-height: 60vh' });
+      preview.innerHTML = m.minutes_html;
+      let t;
+      textarea.addEventListener('input', () => {
+        if (!dirty) { dirty = true; renderToolbar(); }
+        clearTimeout(t);
+        t = setTimeout(async () => {
+          const res = await App.api('POST', '/api/markdown/preview', { markdown: textarea.value });
+          if (res.ok) preview.innerHTML = res.data.html;
+        }, 400);
+      });
+      content.append(el('div', { class: 'grid grid-cols-2 gap-4' }, [
+        el('div', { class: 'space-y-2' }, [el('span', { class: 'label', text: 'Markdown' }), textarea]),
+        el('div', { class: 'space-y-2' }, [el('span', { class: 'label', text: 'Pratinjau' }), preview]),
+      ]));
+    } else {
+      const prose = el('div', { class: 'prose' });
+      prose.innerHTML = m.minutes_html;
+      prose.addEventListener('click', (e) => {
+        const ts = e.target.closest('.ts-link');
+        if (ts) seek(Number(ts.dataset.seek));
+      });
+      content.append(prose);
+      if (m.minutes_edited_by) {
+        content.append(el('p', { class: 'text-xs text-gray-400 mt-6', text: `Terakhir diedit oleh ${m.minutes_edited_by}` }));
+      }
+      if (m.has_backup && m.can_edit && m.status === 'done') {
+        content.append(el('div', { class: 'mt-4' }, button('Kembalikan versi sebelumnya', 'rotate', restore)));
+      }
+    }
+    const nodes = [content];
+    if (m.status === 'failed') {
+      nodes.push(el('div', { class: 'm-0 mx-6 mb-6 p-4 rounded-lg bg-red-100 text-red-700' }, [
+        el('p', { class: 'text-sm font-medium', text: m.error_message || 'Pemrosesan gagal.' }),
+        m.can_edit ? el('button', { type: 'button', class: 'btn btn-outline btn-sm mt-3', onclick: retry }, [icon('refresh'), 'Proses Ulang']) : null,
+      ]));
+    }
+    box.replaceChildren(...nodes);
+  }
+
+  function render() {
+    renderAudio();
+    renderToolbar();
+    renderSummary();
+  }
+
+  async function refresh() {
+    const res = await App.api('GET', `/api/meetings/${m.id}`);
+    if (!res.ok) return;
+    const before = m.status;
+    m = res.data;
+    if (before !== m.status) {
+      if (m.status === 'done') App.toast('success', 'Notulen siap ditinjau.');
+      if (m.status === 'failed') App.toast('error', m.error_message || 'Pemrosesan gagal.');
+      if (before === 'transcribing' || m.status === 'done' || m.status === 'failed') loadTranscript();
+    }
+    if (!editing) render();
+    schedulePoll();
+  }
+
+  // Poll every 5 s while the meeting is still being processed (FR-005).
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    if (isProcessing(m.status)) pollTimer = setTimeout(refresh, 5000);
+  }
+
+  function startEdit() { editing = true; dirty = false; render(); }
+
+  async function cancelEdit() {
+    if (dirty && !(await App.confirm({ title: 'Buang perubahan?', text: 'Ada perubahan yang belum disimpan. Tetap keluar?', confirmLabel: 'Keluar' }))) return;
+    editing = false;
+    dirty = false;
+    render();
+  }
+
+  async function saveMinutes() {
+    const text = document.querySelector('#summary textarea').value;
+    if (!text.trim()) { App.toast('error', 'Notulen tidak boleh kosong.'); return; }
+    const res = await App.api('PUT', `/api/meetings/${m.id}/minutes`, { minutes_markdown: text, updated_at: m.updated_at });
+    if (!res.ok) { App.toast('error', res.data.error || 'Notulen gagal disimpan.'); return; }
+    m.minutes_markdown = text;
+    m.minutes_html = res.data.minutes_html;
+    m.updated_at = res.data.updated_at;
+    editing = false;
+    dirty = false;
+    App.toast('success', 'Notulen tersimpan.');
+    refresh();
+  }
+
+  async function regenerate() {
+    const ok = await App.confirm({ title: 'Buat ulang notulen?', text: 'Notulen saat ini akan disimpan sebagai versi sebelumnya. Lanjutkan?' });
+    if (!ok) return;
+    const res = await App.api('POST', `/api/meetings/${m.id}/regenerate`, { template_id: selectedTemplate });
+    if (!res.ok) { App.toast('error', res.data.error || 'Gagal membuat ulang notulen.'); return; }
+    App.toast('success', 'Notulen sedang dibuat ulang.');
+    refresh();
+  }
+
+  async function restore() {
+    const res = await App.api('POST', `/api/meetings/${m.id}/restore-backup`);
+    if (!res.ok) { App.toast('error', res.data.error || 'Gagal mengembalikan versi sebelumnya.'); return; }
+    App.toast('success', 'Versi sebelumnya dikembalikan.');
+    refresh();
+  }
+
+  async function retry() {
+    const res = await App.api('POST', `/api/meetings/${m.id}/retry`);
+    if (!res.ok) { App.toast('error', res.data.error || 'Gagal memproses ulang.'); return; }
+    App.toast('success', 'Rapat dimasukkan kembali ke antrean.');
+    refresh();
+  }
+
+  async function finishRecording() {
+    const res = await App.api('POST', `/api/recordings/${m.id}/finish`);
+    if (!res.ok) { App.toast('error', res.data.error || 'Rekaman tidak bisa diproses.'); return; }
+    App.toast('success', 'Rekaman selesai dan masuk antrean.');
+    refresh();
+  }
+
+  async function openParticipants() {
+    const res = await App.api('GET', '/api/users/options');
+    if (!res.ok) { App.toast('error', res.data.error || 'Gagal memuat pengguna.'); return; }
+    const holder = el('div');
+    const picker = App.participantPicker(holder, res.data.items, m.participants.map((p) => p.id), m.owner_id);
+    const save = el('button', { type: 'button', class: 'btn btn-blue', text: 'Simpan' });
+    const cancel = el('button', { type: 'button', class: 'btn btn-outline', text: 'Batal' });
+    const d = App.dialog({ title: [icon('users-title'), 'Peserta Rapat'], description: 'Peserta bisa membuka notulen, transkrip, dan audio rapat ini.', content: holder, footer: [cancel, save] });
+    cancel.addEventListener('click', d.close);
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      const r = await App.api('PUT', `/api/meetings/${m.id}/participants`, { participant_ids: picker.values() });
+      save.disabled = false;
+      if (!r.ok) { App.toast('error', r.data.error || 'Gagal menyimpan peserta.'); return; }
+      m.participants = r.data.participants;
+      d.close();
+      App.toast('success', 'Daftar peserta tersimpan.');
+      render();
+    });
+  }
+
+  function openDelete() {
+    const input = el('input', { class: 'input', 'aria-label': 'Ketik judul rapat' });
+    const del = el('button', { type: 'button', class: 'btn btn-destructive', text: 'Hapus Rapat', disabled: true });
+    const cancel = el('button', { type: 'button', class: 'btn btn-outline', text: 'Batal' });
+    input.addEventListener('input', () => { del.disabled = input.value !== m.title; });
+    const d = App.dialog({
+      title: [icon('trash-title'), 'Hapus Rapat'],
+      description: 'Rapat, transkrip, notulen, dan audionya dihapus permanen. Ketik judul rapat untuk melanjutkan.',
+      content: el('div', { class: 'space-y-2' }, [el('p', { class: 'text-sm font-medium text-gray-900', text: m.title }), input]),
+      footer: [cancel, del],
+    });
+    cancel.addEventListener('click', d.close);
+    del.addEventListener('click', async () => {
+      del.disabled = true;
+      const r = await App.api('DELETE', `/api/meetings/${m.id}`, { confirm_title: input.value });
+      if (!r.ok) { del.disabled = false; App.toast('error', r.data.error || 'Gagal menghapus rapat.'); return; }
+      App.flash('success', 'Rapat dihapus.');
+      window.location.href = r.data.redirect;
+    });
+  }
+
+  window.addEventListener('beforeunload', (e) => { if (editing && dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+  (async () => {
+    render();
+    loadTranscript();
+    schedulePoll();
+    if (m.can_edit) {
+      const res = await App.api('GET', '/api/templates');
+      if (res.ok) { templates = res.data.items; renderToolbar(); }
+    }
+  })();
+})();
+</script>
+{{end}}

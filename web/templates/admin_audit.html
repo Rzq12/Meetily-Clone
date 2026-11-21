@@ -1,0 +1,121 @@
+{{define "content"}}
+<div class="h-screen bg-gray-50 flex flex-col">
+  {{template "admin_header" .}}
+  <div class="flex-1 overflow-y-auto custom-scrollbar">
+    <div class="max-w-6xl mx-auto p-8 pt-6 space-y-6 page-enter">
+      <form id="filters" class="bg-white rounded-lg border border-gray-200 p-6 shadow-sm" novalidate>
+        <h3 class="text-lg font-semibold text-gray-900 mb-2">Log Audit</h3>
+        <p class="text-sm text-gray-600 mb-6">Catatan login, akses, ekspor, dan perubahan. Isi transkrip dan notulen tidak pernah dicatat.</p>
+        <div class="flex flex-wrap items-end gap-4">
+          <div class="space-y-2 w-48">
+            <label for="user_id" class="label">Pengguna</label>
+            <select id="user_id" name="user_id" class="select"><option value="">Semua pengguna</option></select>
+          </div>
+          <div class="space-y-2 w-48">
+            <label for="action" class="label">Aksi</label>
+            <select id="action" name="action" class="select">
+              <option value="">Semua aksi</option>
+              {{range .Data}}<option value="{{.}}">{{.}}</option>{{end}}
+            </select>
+          </div>
+          <div class="space-y-2 w-40">
+            <label for="date_from" class="label">Dari tanggal</label>
+            <input id="date_from" name="date_from" type="date" class="input">
+          </div>
+          <div class="space-y-2 w-40">
+            <label for="date_to" class="label">Sampai tanggal</label>
+            <input id="date_to" name="date_to" type="date" class="input">
+          </div>
+          <div class="flex gap-2">
+            <button type="submit" class="btn btn-default">{{icon "search"}}Terapkan</button>
+            <button type="button" id="reset" class="btn btn-outline">Reset</button>
+          </div>
+        </div>
+      </form>
+
+      <div class="bg-white rounded-lg border border-gray-200 shadow-sm">
+        <div id="state-loading" class="flex items-center justify-center p-8"><div class="spinner-lg"></div></div>
+        <div id="state-error" class="p-6" hidden><div class="bg-red-50 border border-red-200 rounded-lg p-3"><p class="text-sm text-red-800"></p></div></div>
+        <div id="state-empty" class="flex flex-col items-center justify-center p-8 text-center" hidden>
+          {{icon "shield" "w-16 h-16 text-gray-300 mb-4"}}
+          <h3 class="text-lg font-semibold text-gray-900">Tidak ada aktivitas.</h3>
+        </div>
+        <div id="state-list" class="overflow-x-auto" hidden>
+          <table class="table">
+            <thead><tr><th>Waktu</th><th>Pengguna</th><th>Aksi</th><th>Rapat</th><th>Alamat IP</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <div id="pager" class="flex items-center justify-between border-t border-gray-200 px-6 py-3" hidden>
+          <p class="text-sm text-gray-600" id="pager-info"></p>
+          <div class="btn-group">
+            <button type="button" class="btn btn-outline btn-sm" id="prev">{{icon "chevron-left"}}Sebelumnya</button>
+            <button type="button" class="btn btn-outline btn-sm" id="next">Berikutnya{{icon "chevron-right"}}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+'use strict';
+(() => {
+  const el = App.el;
+  const labels = {
+    login_success: 'Login berhasil', login_failed: 'Login gagal', meeting_view: 'Membuka rapat',
+    minutes_edit: 'Mengedit notulen', regenerate: 'Membuat ulang notulen', export: 'Ekspor notulen',
+    participants_change: 'Mengubah peserta', meeting_delete: 'Menghapus rapat', user_change: 'Mengubah pengguna',
+  };
+  const form = document.getElementById('filters');
+  form.elements.action.querySelectorAll('option').forEach((o) => { if (o.value) o.textContent = labels[o.value] || o.value; });
+  const states = ['loading', 'error', 'empty', 'list'].reduce((m, k) => (m[k] = document.getElementById('state-' + k), m), {});
+  const show = (s) => { for (const [k, n] of Object.entries(states)) n.hidden = k !== s; };
+  const pager = document.getElementById('pager');
+  const fmt = new Intl.DateTimeFormat('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  let page = 1;
+
+  async function load() {
+    pager.hidden = true;
+    if (form.date_from.value && form.date_to.value && form.date_from.value > form.date_to.value) {
+      states.error.querySelector('p').textContent = 'Rentang tanggal tidak valid.';
+      show('error');
+      return;
+    }
+    show('loading');
+    const params = new URLSearchParams({ page });
+    for (const n of ['user_id', 'action', 'date_from', 'date_to']) if (form.elements[n].value) params.set(n, form.elements[n].value);
+    const res = await App.api('GET', '/api/audit-logs?' + params);
+    if (!res.ok) { states.error.querySelector('p').textContent = res.data.error || 'Gagal memuat log.'; show('error'); return; }
+    const { items, total, page_size } = res.data;
+    if (items.length === 0) { show('empty'); return; }
+    document.getElementById('rows').replaceChildren(...items.map((a) => el('tr', {}, [
+      el('td', { class: 'text-gray-600 whitespace-nowrap', text: fmt.format(new Date(a.created_at)) + ' WIB' }),
+      el('td', { class: 'text-gray-900', text: a.user_full_name || '-' }),
+      el('td', {}, el('span', { class: 'badge ' + (a.action === 'login_failed' || a.action === 'meeting_delete' ? 'badge-failed' : 'badge-queued'), text: labels[a.action] || a.action })),
+      el('td', { class: 'text-gray-600', text: a.meeting_title || '-' }),
+      el('td', { class: 'text-gray-600 font-mono text-xs', text: a.ip_address }),
+    ])));
+    show('list');
+    const pages = Math.max(1, Math.ceil(total / page_size));
+    document.getElementById('pager-info').textContent = `Halaman ${page} dari ${pages} · ${total} entri`;
+    document.getElementById('prev').disabled = page <= 1;
+    document.getElementById('next').disabled = page >= pages;
+    pager.hidden = pages <= 1;
+  }
+
+  form.addEventListener('submit', (e) => { e.preventDefault(); page = 1; load(); });
+  document.getElementById('reset').addEventListener('click', () => { form.reset(); page = 1; load(); });
+  document.getElementById('prev').addEventListener('click', () => { page--; load(); });
+  document.getElementById('next').addEventListener('click', () => { page++; load(); });
+
+  (async () => {
+    const users = await App.api('GET', '/api/users');
+    if (users.ok) form.user_id.append(...users.data.items.map((u) => el('option', { value: u.id, text: u.full_name })));
+    load();
+  })();
+})();
+</script>
+{{end}}

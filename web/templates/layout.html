@@ -1,0 +1,145 @@
+{{define "layout"}}<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Notulensi AI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+<script>try { if (localStorage.getItem('sidebarCollapsed') === '1') document.documentElement.classList.add('sidebar-collapsed') } catch (e) {}</script>
+</head>
+<body data-csrf="{{.CSRF}}" data-active="{{.Active}}" data-user-id="{{.User.ID}}">
+<div class="flex">
+  <div class="fixed top-0 left-0 h-screen z-40">
+    <button type="button" id="sidebar-toggle" class="absolute -right-6 top-20 z-50 p-1 bg-white hover:bg-gray-100 rounded-full shadow-lg border" style="transform: translateX(50%)" aria-label="Ciutkan atau lebarkan sidebar">
+      <span class="icon-collapse">{{icon "circle-chevron-left" "w-6 h-6"}}</span>
+      <span class="icon-expand">{{icon "circle-chevron-right" "w-6 h-6"}}</span>
+    </button>
+
+    <div class="sidebar-panel h-screen bg-white border-r shadow-sm flex flex-col">
+      <div class="flex-shrink-0 h-22 flex items-center expanded-only">
+        <div class="flex-1">
+          <div class="p-3">
+            <a href="/meetings" class="w-full text-lg text-center border rounded-full bg-blue-50 border-white font-semibold text-gray-700 mb-2 block hover:opacity-80 transition-opacity">Notulensi AI</a>
+            <div class="relative mb-1">
+              <div class="input-group">
+                <span class="input-group-addon">{{icon "search"}}</span>
+                <input id="sidebar-search" type="search" placeholder="Cari judul rapat..." autocomplete="off" aria-label="Cari judul rapat">
+                <button type="button" id="sidebar-search-clear" class="input-group-button" aria-label="Hapus pencarian" hidden>{{icon "x"}}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex-1 flex flex-col min-h-0">
+        <div class="flex-shrink-0 expanded-only">
+          <a href="/meetings" class="p-3 text-lg font-semibold items-center hover:bg-gray-100 h-10 flex mx-3 mt-3 rounded-lg cursor-pointer">
+            {{icon "house" "w-4 h-4 mr-2"}}<span>Beranda</span>
+          </a>
+        </div>
+
+        <div class="flex-1 flex flex-col min-h-0">
+          <div class="collapsed-only flex-col items-center space-y-4 mt-4">
+            <a href="/meetings" class="flex items-center justify-center mb-2 w-10 h-10 rounded-full bg-blue-50 font-semibold text-gray-700 hover:opacity-80 transition-opacity" data-tip="Notulensi AI">N</a>
+            <a href="/meetings" class="p-2 rounded-lg transition-colors duration-150 {{if eq .Active "home"}}bg-gray-100{{else}}hover:bg-gray-100{{end}}" data-tip="Beranda">{{icon "house" "w-5 h-5 text-gray-600"}}</a>
+            {{if .User.CanCreateMeetings}}
+            <a href="/meetings/new?mode=record" class="p-2 bg-red-500 hover:bg-red-600 rounded-full transition-colors duration-150 shadow-sm" data-tip="Mulai Rekam">{{icon "mic" "w-5 h-5 text-white"}}</a>
+            <a href="/meetings/new" class="p-2 rounded-lg transition-colors duration-150 hover:bg-blue-100 bg-blue-50" data-tip="Unggah Audio">{{icon "upload" "w-5 h-5 text-blue-600"}}</a>
+            {{end}}
+            <button type="button" class="p-2 rounded-lg transition-colors duration-150 hover:bg-gray-100" data-tip="Notulen Rapat" data-expand-sidebar>{{icon "notebook-pen" "w-5 h-5 text-gray-600"}}</button>
+            {{if .User.IsAdmin}}
+            <a href="/admin/users" class="p-2 rounded-lg transition-colors duration-150 {{if or (eq .Active "users") (eq .Active "templates") (eq .Active "audit")}}bg-gray-100{{else}}hover:bg-gray-100{{end}}" data-tip="Pengaturan">{{icon "settings" "w-5 h-5 text-gray-600"}}</a>
+            {{end}}
+            <button type="button" class="p-2 rounded-lg transition-colors duration-150 hover:bg-gray-100" data-tip="Keluar" data-logout>{{icon "log-out" "w-5 h-5 text-gray-600"}}</button>
+          </div>
+
+          <div class="flex-shrink-0 expanded-only">
+            <div class="flex items-center transition-all duration-150 p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg">
+              {{icon "notebook-pen" "w-4 h-4 mr-2 text-gray-600"}}<span class="text-gray-700">Notulen Rapat</span>
+              <span id="sidebar-searching" class="ml-2 text-xs text-blue-500 animate-pulse" hidden>Mencari...</span>
+            </div>
+          </div>
+
+          <div class="flex-1 overflow-y-auto custom-scrollbar min-h-0 expanded-only">
+            <div class="mx-3" id="sidebar-meetings" aria-live="polite"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex-shrink-0 p-2 border-t border-gray-100 expanded-only">
+        {{if .User.CanCreateMeetings}}
+        <a href="/meetings/new?mode=record" class="w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors shadow-sm">
+          {{icon "mic" "w-4 h-4 mr-2"}}<span>Mulai Rekam</span>
+        </a>
+        <a href="/meetings/new" class="w-full flex items-center justify-center px-3 py-2 mt-1 text-sm font-medium text-gray-700 bg-blue-100 hover:bg-blue-200 rounded-lg transition-colors shadow-sm">
+          {{icon "upload" "w-4 h-4 mr-2"}}<span>Unggah Audio</span>
+        </a>
+        {{end}}
+        {{if .User.IsAdmin}}
+        <a href="/admin/users" class="w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors shadow-sm">
+          {{icon "settings" "w-4 h-4 mr-2"}}<span>Pengaturan</span>
+        </a>
+        {{end}}
+        <div class="w-full flex items-center justify-between gap-2 px-3 py-1.5 mt-1">
+          <div class="min-w-0">
+            <div class="text-sm font-medium text-gray-700 truncate">{{.User.FullName}}</div>
+            <div class="text-xs text-gray-500">{{roleLabel .User.Role}}</div>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm px-2" data-logout title="Keluar" aria-label="Keluar">{{icon "log-out"}}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <main class="main flex-1 min-w-0 overflow-hidden">
+    <div class="pl-8 min-w-0 w-full max-w-full overflow-hidden">
+      {{template "content" .}}
+    </div>
+  </main>
+</div>
+
+<div class="toaster" id="toaster" aria-live="polite"></div>
+
+<template id="tpl-sidebar-item">
+  <a class="flex items-center transition-all duration-150 group px-3 py-2 my-0.5 rounded-md text-sm cursor-pointer" style="padding-left: 24px">
+    <div class="flex flex-col w-full">
+      <div class="flex items-center w-full">
+        <div class="flex-shrink-0 flex items-center justify-center w-6 h-6 rounded-full mr-2 bg-gray-100">{{icon "file" "w-3.5 h-3.5 text-gray-600"}}</div>
+        <span class="flex-1 break-words" data-title></span>
+      </div>
+    </div>
+  </a>
+</template>
+<template id="tpl-toast-icons">
+  <span data-kind="success">{{icon "circle-check" "toast-icon"}}</span>
+  <span data-kind="error">{{icon "circle-alert" "toast-icon"}}</span>
+  <span data-kind="info">{{icon "info" "toast-icon"}}</span>
+  <span data-kind="warning">{{icon "triangle-alert" "toast-icon"}}</span>
+  <span data-kind="close">{{icon "x"}}</span>
+</template>
+
+<script src="/static/app.js"></script>
+{{block "scripts" .}}{{end}}
+</body>
+</html>{{end}}
+
+{{define "admin_header"}}
+<div class="sticky top-0 z-10 bg-gray-50 border-b border-gray-200">
+  <div class="max-w-6xl mx-auto px-8 py-6">
+    <div class="flex items-center gap-4">
+      <a href="/meetings" class="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors" aria-label="Kembali ke beranda">{{icon "arrow-left" "w-5 h-5"}}</a>
+      <h1 class="text-3xl font-bold">Pengaturan</h1>
+    </div>
+  </div>
+</div>
+<div class="max-w-6xl mx-auto px-8 pt-6 w-full">
+  <nav class="tabs-underline" aria-label="Pengaturan">
+    <a href="/admin/users" class="tab-trigger" aria-selected="{{eq .Active "users"}}">{{icon "users"}}Pengguna</a>
+    <a href="/admin/templates" class="tab-trigger" aria-selected="{{eq .Active "templates"}}">{{icon "file-text"}}Template</a>
+    <a href="/admin/audit" class="tab-trigger" aria-selected="{{eq .Active "audit"}}">{{icon "shield"}}Audit</a>
+  </nav>
+</div>
+{{end}}

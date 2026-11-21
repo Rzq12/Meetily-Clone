@@ -1,0 +1,6 @@
+{$SITE_ADDRESS} {
+	# Certificate from Caddy's internal CA; install its root on company browsers so the microphone works.
+	tls internal
+	encode gzip
+	reverse_proxy app:8080
+}

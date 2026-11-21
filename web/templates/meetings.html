@@ -1,0 +1,136 @@
+{{define "content"}}
+<div class="h-screen bg-gray-50 flex flex-col">
+  <div class="sticky top-0 z-10 bg-gray-50 border-b border-gray-200">
+    <div class="max-w-6xl mx-auto px-8 py-6">
+      <div class="flex items-center justify-between gap-4">
+        <h1 class="text-3xl font-bold">Rapat</h1>
+        {{if .User.CanCreateMeetings}}
+        <a href="/meetings/new" class="btn btn-default">{{icon "plus"}}Rapat Baru</a>
+        {{end}}
+      </div>
+    </div>
+  </div>
+
+  <div class="flex-1 overflow-y-auto custom-scrollbar">
+    <div class="max-w-6xl mx-auto p-8 pt-6 space-y-6 page-enter">
+      <form id="filters" class="bg-white rounded-lg border border-gray-200 p-6 shadow-sm" novalidate>
+        <div class="flex flex-wrap items-end gap-4">
+          <div class="flex-1 space-y-2" style="min-width: 16rem">
+            <label for="q" class="label">Judul rapat</label>
+            <div class="input-group">
+              <span class="input-group-addon">{{icon "search"}}</span>
+              <input id="q" name="q" type="search" maxlength="100" placeholder="Cari judul, misalnya Oktober">
+            </div>
+          </div>
+          <div class="space-y-2 w-48">
+            <label for="date_from" class="label">Dari tanggal</label>
+            <input id="date_from" name="date_from" type="date" class="input">
+          </div>
+          <div class="space-y-2 w-48">
+            <label for="date_to" class="label">Sampai tanggal</label>
+            <input id="date_to" name="date_to" type="date" class="input">
+          </div>
+          <div class="flex gap-2">
+            <button type="submit" class="btn btn-default">{{icon "search"}}Cari</button>
+            <button type="button" id="reset" class="btn btn-outline">Reset</button>
+          </div>
+        </div>
+      </form>
+
+      <div class="bg-white rounded-lg border border-gray-200 shadow-sm">
+        <div id="state-loading" class="flex items-center justify-center p-8">
+          <div class="text-center">
+            <div class="spinner-lg mb-4"></div>
+            <p class="text-gray-600">Memuat rapat...</p>
+          </div>
+        </div>
+        <div id="state-error" class="p-6" hidden>
+          <div class="bg-red-50 border border-red-200 rounded-lg p-3"><p class="text-sm text-red-800"></p></div>
+        </div>
+        <div id="state-empty" class="flex flex-col items-center justify-center p-8 text-center" hidden>
+          {{icon "file-question" "w-16 h-16 text-gray-300 mb-4"}}
+          <h3 class="text-lg font-semibold text-gray-900 mb-2">Belum ada rapat yang cocok.</h3>
+          <p class="text-sm text-gray-500 max-w-md">Ubah kata kunci atau rentang tanggal.</p>
+        </div>
+        <div id="state-list" class="overflow-x-auto" hidden>
+          <table class="table">
+            <thead>
+              <tr><th>Judul</th><th>Tanggal rapat</th><th>Notulis</th><th>Status</th><th class="text-right">Durasi</th></tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <div id="pager" class="flex items-center justify-between border-t border-gray-200 px-6 py-3" hidden>
+          <p class="text-sm text-gray-600" id="pager-info"></p>
+          <div class="btn-group">
+            <button type="button" class="btn btn-outline btn-sm" id="prev">{{icon "chevron-left"}}Sebelumnya</button>
+            <button type="button" class="btn btn-outline btn-sm" id="next">Berikutnya{{icon "chevron-right"}}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+'use strict';
+(() => {
+  const form = document.getElementById('filters');
+  const states = ['loading', 'error', 'empty', 'list'].reduce((m, k) => (m[k] = document.getElementById('state-' + k), m), {});
+  const rows = document.getElementById('rows');
+  const pager = document.getElementById('pager');
+  let page = 1;
+
+  function show(state) {
+    for (const [k, node] of Object.entries(states)) node.hidden = k !== state;
+  }
+
+  async function load() {
+    const params = new URLSearchParams({ page });
+    for (const name of ['q', 'date_from', 'date_to']) if (form[name].value) params.set(name, form[name].value.trim());
+    if (form.date_from.value && form.date_to.value && form.date_from.value > form.date_to.value) {
+      states.error.querySelector('p').textContent = 'Rentang tanggal tidak valid.';
+      show('error');
+      pager.hidden = true;
+      return;
+    }
+    show('loading');
+    pager.hidden = true;
+    const res = await App.api('GET', '/api/meetings?' + params);
+    if (!res.ok) {
+      states.error.querySelector('p').textContent = res.data.error || 'Gagal memuat rapat.';
+      show('error');
+      return;
+    }
+    const { items, total, page_size } = res.data;
+    if (items.length === 0) { show('empty'); return; }
+    rows.replaceChildren(...items.map((m) => {
+      const tr = App.el('tr', { class: 'row-link', tabindex: '0' }, [
+        App.el('td', {}, App.el('a', { href: '/meetings/' + m.id, class: 'font-medium text-gray-900 hover:underline', text: m.title })),
+        App.el('td', { class: 'text-gray-600 whitespace-nowrap', text: m.meeting_date_label }),
+        App.el('td', { class: 'text-gray-600', text: m.owner_name }),
+        App.el('td', {}, App.el('span', { class: 'badge badge-' + m.status, text: m.status_label })),
+        App.el('td', { class: 'text-right text-gray-600 tabular-nums', text: App.duration(m.audio_duration_sec) }),
+      ]);
+      tr.addEventListener('click', (e) => { if (!e.target.closest('a')) window.location.href = '/meetings/' + m.id; });
+      tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') window.location.href = '/meetings/' + m.id; });
+      return tr;
+    }));
+    show('list');
+    const pages = Math.max(1, Math.ceil(total / page_size));
+    document.getElementById('pager-info').textContent = `Halaman ${page} dari ${pages} · ${total} rapat`;
+    document.getElementById('prev').disabled = page <= 1;
+    document.getElementById('next').disabled = page >= pages;
+    pager.hidden = pages <= 1;
+  }
+
+  form.addEventListener('submit', (e) => { e.preventDefault(); page = 1; load(); });
+  document.getElementById('reset').addEventListener('click', () => { form.reset(); page = 1; load(); });
+  document.getElementById('prev').addEventListener('click', () => { page--; load(); });
+  document.getElementById('next').addEventListener('click', () => { page++; load(); });
+  load();
+})();
+</script>
+{{end}}
